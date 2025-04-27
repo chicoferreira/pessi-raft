@@ -2,8 +2,9 @@ use crate::raft;
 use crate::raft::{Node, NodeId, RaftError};
 use crate::transport::{ClientRequest, ClientResponse, RaftTransport};
 use anyhow::{bail, Context};
+use log::debug;
 use serde::{Deserialize, Serialize};
-use tokio::io;
+use std::mem;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -26,25 +27,25 @@ pub enum MaelstromBody {
         in_reply_to: usize,
     },
     Read {
-        key: String,
+        key: usize,
         msg_id: usize,
     },
     ReadOk {
         in_reply_to: usize,
-        value: String,
+        value: usize,
     },
     Write {
-        key: String,
-        value: String,
+        key: usize,
+        value: usize,
         msg_id: usize,
     },
     WriteOk {
         in_reply_to: usize,
     },
     Cas {
-        key: String,
-        from: String,
-        to: String,
+        key: usize,
+        from: usize,
+        to: usize,
         msg_id: usize,
     },
     CasOk {
@@ -73,32 +74,49 @@ pub enum ErrorCode {
     TxnConflict = 30,
 }
 
-pub struct MaelstromServer {}
+pub struct MaelstromServer {
+    reader: BufReader<tokio::io::Stdin>,
+    buffer: Vec<u8>,
+}
 
 impl MaelstromServer {
     pub fn new() -> Self {
-        Self {}
+        let reader = BufReader::new(tokio::io::stdin());
+        let buffer = Vec::new();
+        Self { reader, buffer }
     }
 
-    pub async fn receive_message(&self) -> anyhow::Result<MaelstromMessage> {
-        let mut input = String::new();
-        let mut reader = BufReader::new(io::stdin());
-        reader.read_line(&mut input).await?;
+    pub async fn receive_message(&mut self) -> anyhow::Result<Option<MaelstromMessage>> {
+        let _ = self.reader.read_until(b'\n', &mut self.buffer).await?;
+
+        let buffer = mem::replace(&mut self.buffer, Vec::new());
+        let input = String::from_utf8(buffer).context("Failed to read line")?;
+
+        debug!("Received message: {}", input);
+
+        let input = input.trim();
+        if input.is_empty() {
+            return Ok(None);
+        }
 
         let message: MaelstromMessage =
             serde_json::from_str(&input).context("Failed to deserialize message")?;
-        Ok(message)
+        Ok(Some(message))
     }
 
-    pub async fn init(&self) -> anyhow::Result<(NodeId, Vec<NodeId>)> {
+    pub async fn init(&mut self) -> anyhow::Result<(NodeId, Vec<NodeId>)> {
         let init_message = self.receive_message().await?;
+        let Some(init_message) = init_message else {
+            bail!("Expected Init message, got None");
+        };
+
         let MaelstromBody::Init {
             msg_id,
             node_id,
             node_ids,
         } = init_message.body
         else {
-            anyhow::bail!("Expected Init message, got {:?}", init_message.body);
+            bail!("Expected Init message, got {:?}", init_message.body);
         };
 
         let init_ok = MaelstromBody::InitOk {
@@ -112,11 +130,16 @@ impl MaelstromServer {
 
     pub async fn handle_message(
         &mut self,
-        message: anyhow::Result<MaelstromMessage>,
+        message: anyhow::Result<Option<MaelstromMessage>>,
         node: &mut Node,
     ) -> anyhow::Result<()> {
         let message = message.context("Error receiving message")?;
 
+        let Some(message) = message else {
+            return Ok(());
+        };
+
+        debug!("Received message: {:?}", message);
         if let MaelstromBody::Raft(raft_msg) = message.body {
             return node
                 .handle_raft_message(self, raft_msg)
@@ -150,9 +173,16 @@ impl MaelstromServer {
 
         if let Err(RaftError::NotLeader { leader }) = append {
             if let Some(leader_id) = leader {
+                debug!(
+                    "Received change log message and I am not leader. Forwarding to leader: {:?}",
+                    leader_id
+                );
                 self.send_message(message.src.clone(), leader_id, forward_body)
                     .await?;
             } else {
+                debug!(
+                    "Received change log message and I am not leader. There is no elected leader."
+                );
                 let body = MaelstromBody::Error {
                     in_reply_to: msg_id,
                     code: ErrorCode::TemporarilyUnavailable,
@@ -182,7 +212,7 @@ impl MaelstromServer {
 
         let output = serde_json::to_string(&message).context("Failed to serialize message")?;
 
-        let mut stdout = io::stdout();
+        let mut stdout = tokio::io::stdout();
         stdout.write_all(output.as_bytes()).await?;
         stdout.write_all(b"\n").await?;
         stdout.flush().await?;

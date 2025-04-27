@@ -1,5 +1,6 @@
 use crate::transport::{ClientRequest, ClientResponse, RaftTransport};
 use anyhow::Result;
+use log::debug;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::cmp::min;
@@ -9,8 +10,6 @@ use thiserror::Error;
 
 pub type NodeId = String;
 pub type TermId = usize;
-
-// TODO: handle leader timeout
 
 #[derive(Debug, Default)]
 pub struct Node {
@@ -27,7 +26,7 @@ pub struct Node {
     acked_length: HashMap<NodeId, usize>,
     election_deadline: Option<Instant>,
     election_timeout_range: (Duration, Duration), // min, max
-    commited_log: HashMap<String, String>,
+    commited_log: HashMap<usize, usize>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -81,7 +80,8 @@ pub struct LogResponseMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "raft_type")]
+#[serde(rename_all = "snake_case")]
 pub enum RaftMessage {
     VoteRequest(VoteRequestMessage),
     VoteResponse(VoteResponseMessage),
@@ -96,12 +96,12 @@ pub enum RaftError {
     Anyhow(#[from] anyhow::Error),
 }
 
-const ELECTION_TIMEOUT_MIN: Duration = Duration::from_millis(150);
-const ELECTION_TIMEOUT_MAX: Duration = Duration::from_millis(300);
+const ELECTION_TIMEOUT_MIN: Duration = Duration::from_millis(1500);
+const ELECTION_TIMEOUT_MAX: Duration = Duration::from_millis(2000);
 
 impl Node {
     pub fn new(id: NodeId, nodes: Vec<NodeId>) -> Self {
-        Self {
+        let mut node = Self {
             id,
             nodes,
             current_term: 0,
@@ -116,10 +116,16 @@ impl Node {
             election_deadline: None,
             election_timeout_range: (ELECTION_TIMEOUT_MIN, ELECTION_TIMEOUT_MAX),
             commited_log: HashMap::new(),
-        }
+        };
+        node.start_election_timer();
+        node
     }
 
     pub async fn start_election(&mut self, transport: &impl RaftTransport) -> Result<()> {
+        debug!(
+            "Starting election for term {} with me as a candidate",
+            self.current_term
+        );
         self.current_role = Role::Candidate;
         self.current_term += 1;
         self.voted_for = Some(self.id.clone());
@@ -137,6 +143,7 @@ impl Node {
         let nodes = self.nodes.clone();
         for node in nodes {
             if node != self.id {
+                debug!("Sending vote request to {}", node);
                 self.send_message(transport, node, vote_request_message.clone())
                     .await?
             }
@@ -152,6 +159,10 @@ impl Node {
         let random_duration = rand::rng().random_range(min..max);
 
         self.election_deadline = Some(Instant::now() + random_duration);
+        debug!(
+            "Election timer changed to deadline {:?}",
+            self.election_deadline
+        );
     }
 
     pub fn cancel_election_timer(&mut self) {
@@ -163,6 +174,10 @@ impl Node {
         transport: &impl RaftTransport,
         candidate_vote_request: VoteRequestMessage,
     ) -> Result<()> {
+        debug!(
+            "Received vote request from {} for term {}",
+            candidate_vote_request.node_id, candidate_vote_request.current_term
+        );
         if candidate_vote_request.current_term > self.current_term {
             self.current_term = candidate_vote_request.current_term;
             self.current_role = Role::Follower;
@@ -187,6 +202,8 @@ impl Node {
             self.voted_for = Some(candidate_vote_request.node_id.clone());
         }
 
+        debug!("Voting {vote_granted}.");
+
         let vote_response_message = RaftMessage::VoteResponse(VoteResponseMessage {
             node_id: self.id.clone(),
             current_term: self.current_term,
@@ -206,12 +223,17 @@ impl Node {
         transport: &impl RaftTransport,
         vote_response: VoteResponseMessage,
     ) -> Result<()> {
+        let from = vote_response.node_id;
         if matches!(self.current_role, Role::Candidate)
             && vote_response.current_term == self.current_term
             && vote_response.vote_granted
         {
-            self.votes_received.insert(vote_response.node_id);
-            if self.votes_received.len() >= self.quorum() {
+            debug!("Received positive vote from {from} to become a leader");
+
+            self.votes_received.insert(from);
+            let received_votes = self.votes_received.len();
+            if received_votes >= self.quorum() {
+                debug!("Received quorum votes ({received_votes} votes), becoming leader");
                 self.current_role = Role::Leader;
                 self.current_leader = Some(self.id.clone());
                 self.cancel_election_timer();
@@ -224,10 +246,13 @@ impl Node {
                 }
             }
         } else if vote_response.current_term > self.current_term {
+            debug!("Received vote response with higher term, becoming follower");
             self.current_term = vote_response.current_term;
             self.current_role = Role::Follower;
             self.voted_for = None;
-            self.cancel_election_timer();
+            self.start_election_timer();
+        } else if !vote_response.vote_granted {
+            debug!("Received negative vote response from {from}");
         }
 
         Ok(())
@@ -262,6 +287,7 @@ impl Node {
 
     pub async fn tick_periodically(&mut self, transport: &impl RaftTransport) -> Result<()> {
         if matches!(self.current_role, Role::Leader) {
+            debug!("I am leader, replicating log to followers");
             for follower in &self.nodes {
                 if *follower != self.id {
                     self.replicate_log(transport, follower.clone()).await?;
@@ -315,6 +341,7 @@ impl Node {
         if log_request.current_term == self.current_term {
             self.current_role = Role::Follower;
             self.current_leader = Some(log_request.leader_id.clone());
+            self.start_election_timer();
         }
 
         let log_ok = (self.log.len() >= log_request.prefix_length)
@@ -463,37 +490,22 @@ impl Node {
         transport: &impl RaftTransport,
         log_entry: LogEntry,
     ) -> Result<()> {
+        #[rustfmt::skip]
         let log_entry_result = match log_entry.request {
             ClientRequest::Read { key, msg_id } => {
                 let value = self.commited_log.get(&key).cloned();
-
-                ClientResponse::ReadOk {
-                    in_reply_to: msg_id,
-                    value,
-                }
+                ClientResponse::ReadOk { in_reply_to: msg_id, value }
             }
             ClientRequest::Write { key, value, msg_id } => {
                 self.commited_log.insert(key.clone(), value.clone());
-
-                ClientResponse::WriteOk {
-                    in_reply_to: msg_id,
-                }
+                ClientResponse::WriteOk { in_reply_to: msg_id }
             }
-            ClientRequest::Cas {
-                key,
-                from,
-                to,
-                msg_id,
-            } => {
+            ClientRequest::Cas { key, from, to, msg_id } => {
                 let written = self.commited_log.get(&key) == Some(&from);
                 if written {
                     self.commited_log.insert(key.clone(), to.clone());
                 }
-
-                ClientResponse::CasOk {
-                    in_reply_to: msg_id,
-                    written,
-                }
+                ClientResponse::CasOk { in_reply_to: msg_id, written }
             }
         };
 

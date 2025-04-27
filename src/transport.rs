@@ -5,18 +5,18 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClientRequest {
     Read {
-        key: String,
+        key: usize,
         msg_id: usize,
     },
     Write {
-        key: String,
-        value: String,
+        key: usize,
+        value: usize,
         msg_id: usize,
     },
     Cas {
-        key: String,
-        from: String,
-        to: String,
+        key: usize,
+        from: usize,
+        to: usize,
         msg_id: usize,
     },
 }
@@ -25,7 +25,7 @@ pub enum ClientRequest {
 pub enum ClientResponse {
     ReadOk {
         in_reply_to: usize,
-        value: Option<String>,
+        value: Option<usize>,
     },
     WriteOk {
         in_reply_to: usize,

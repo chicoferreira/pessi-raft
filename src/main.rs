@@ -1,3 +1,4 @@
+use log::error;
 use std::time::Duration;
 
 mod maelstrom;
@@ -6,6 +7,11 @@ mod transport;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    env_logger::builder()
+        .target(env_logger::Target::Stderr)
+        .filter_level(log::LevelFilter::Debug)
+        .init();
+
     let mut server = maelstrom::MaelstromServer::new();
     let (node_id, node_ids) = server.init().await?;
 
@@ -16,14 +22,19 @@ async fn main() -> anyhow::Result<()> {
         tokio::select! {
             msg = server.receive_message() => {
                 if let Err(e) = server.handle_message(msg, &mut node).await {
-                    eprintln!("Error handling message: {:?}", e);
+                    error!("Error handling message: {:?}", e);
                 }
             }
             _ = ticker.tick() => {
                 if let Err(e) = node.tick_periodically(&server).await {
-                    eprintln!("Error handling timeout: {:?}", e);
+                    error!("Error handling timeout: {:?}", e);
                 }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                break;
             }
         }
     }
+
+    Ok(())
 }
