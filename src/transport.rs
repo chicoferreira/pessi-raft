@@ -43,6 +43,7 @@ pub trait RaftTransport {
         to: NodeId,
         message: raft::RaftMessage,
     ) -> anyhow::Result<()>;
+
     async fn send_client_response(
         &self,
         from: NodeId,

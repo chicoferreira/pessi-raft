@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
+use thiserror::Error;
 
 pub type NodeId = String;
 pub type TermId = usize;
@@ -86,6 +87,13 @@ pub enum RaftMessage {
     VoteResponse(VoteResponseMessage),
     LogRequest(LogRequestMessage),
     LogResponse(LogResponseMessage),
+}
+
+#[derive(Debug, Error)]
+#[error("Raft error")]
+pub enum RaftError {
+    NotLeader { leader: Option<NodeId> },
+    Anyhow(#[from] anyhow::Error),
 }
 
 const ELECTION_TIMEOUT_MIN: Duration = Duration::from_millis(150);
@@ -230,7 +238,7 @@ impl Node {
         transport: &impl RaftTransport,
         from: NodeId,
         request: ClientRequest,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), RaftError> {
         if matches!(self.current_role, Role::Leader) {
             self.log.push(LogEntry {
                 term: self.current_term,
@@ -244,7 +252,9 @@ impl Node {
                 }
             }
         } else {
-            // TODO: forward the request to the currentLeader
+            return Err(RaftError::NotLeader {
+                leader: self.current_leader.clone(),
+            });
         }
 
         Ok(())
@@ -435,7 +445,7 @@ impl Node {
         Ok(())
     }
 
-    pub async fn handle_message(
+    pub async fn handle_raft_message(
         &mut self,
         transport: &impl RaftTransport,
         message: RaftMessage,
@@ -501,6 +511,10 @@ impl Node {
         transport
             .send_raft_message(self.id.clone(), to, message)
             .await
+    }
+
+    pub fn get_id(&self) -> &NodeId {
+        &self.id
     }
 
     fn quorum(&self) -> usize {

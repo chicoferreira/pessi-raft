@@ -1,15 +1,15 @@
 use crate::raft;
-use crate::raft::NodeId;
-use crate::transport::{ClientResponse, RaftTransport};
-use anyhow::Context;
+use crate::raft::{Node, NodeId, RaftError};
+use crate::transport::{ClientRequest, ClientResponse, RaftTransport};
+use anyhow::{bail, Context};
 use serde::{Deserialize, Serialize};
 use tokio::io;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct MaelstromMessage {
-    pub src: String,
-    pub dest: String,
+    pub src: NodeId,
+    pub dest: NodeId,
     pub body: MaelstromBody,
 }
 
@@ -108,6 +108,64 @@ impl MaelstromServer {
             .await?;
 
         Ok((node_id, node_ids))
+    }
+
+    pub async fn handle_message(
+        &mut self,
+        message: anyhow::Result<MaelstromMessage>,
+        node: &mut Node,
+    ) -> anyhow::Result<()> {
+        let message = message.context("Error receiving message")?;
+
+        if let MaelstromBody::Raft(raft_msg) = message.body {
+            return node
+                .handle_raft_message(self, raft_msg)
+                .await
+                .context("Error handling raft message");
+        }
+
+        #[rustfmt::skip]
+        let (request, msg_id, forward_body) = match message.body {
+            MaelstromBody::Read { key, msg_id } => {
+                let req = ClientRequest::Read { key: key.clone(), msg_id };
+                let body = MaelstromBody::Read { key, msg_id };
+                (req, msg_id, body)
+            }
+            MaelstromBody::Write { key, value, msg_id } => {
+                let req = ClientRequest::Write { key: key.clone(), value: value.clone(), msg_id };
+                let body = MaelstromBody::Write { key, value, msg_id };
+                (req, msg_id, body)
+            }
+            MaelstromBody::Cas { key, from, to, msg_id } => {
+                let req = ClientRequest::Cas { key: key.clone(), from: from.clone(), to: to.clone(), msg_id };
+                let body = MaelstromBody::Cas { key, from, to, msg_id };
+                (req, msg_id, body)
+            }
+            _ => {
+                bail!("Unexpected message type: {:?}", message.body);
+            }
+        };
+
+        let append = node.append_to_log(self, message.src.clone(), request).await;
+
+        if let Err(RaftError::NotLeader { leader }) = append {
+            if let Some(leader_id) = leader {
+                self.send_message(message.src.clone(), leader_id, forward_body)
+                    .await?;
+            } else {
+                let body = MaelstromBody::Error {
+                    in_reply_to: msg_id,
+                    code: ErrorCode::TemporarilyUnavailable,
+                    text: Some("Leader is not elected".to_string()),
+                };
+
+                self.send_message(node.get_id().clone(), message.src.clone(), body)
+                    .await?;
+            }
+            Ok(())
+        } else {
+            append.context("Error handling client request")
+        }
     }
 
     pub async fn send_message(
