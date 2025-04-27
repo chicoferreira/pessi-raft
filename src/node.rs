@@ -1,4 +1,4 @@
-use crate::server::MessageSender;
+use crate::server::{LogEntryResponseType, LogEntryType, MessageSender};
 use anyhow::Result;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,7 @@ pub struct Node {
     acked_length: HashMap<NodeId, usize>,
     election_deadline: Option<Instant>,
     election_timeout_range: (Duration, Duration), // min, max
+    commited_log: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -40,7 +41,9 @@ pub enum Role {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogEntry {
     pub term: TermId,
-    pub command: String,
+    /// The node that created this entry
+    pub from: NodeId,
+    pub command: LogEntryType,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +107,7 @@ impl Node {
             acked_length: HashMap::new(),
             election_deadline: None,
             election_timeout_range: (ELECTION_TIMEOUT_MIN, ELECTION_TIMEOUT_MAX),
+            commited_log: HashMap::new(),
         }
     }
 
@@ -199,8 +203,7 @@ impl Node {
             && vote_response.vote_granted
         {
             self.votes_received.insert(vote_response.node_id);
-            // ceil((self.nodes.len() + 1) / 2)
-            if self.votes_received.len() >= (self.nodes.len() + 1).div_ceil(2) {
+            if self.votes_received.len() >= self.quorum() {
                 self.current_role = Role::Leader;
                 self.current_leader = Some(self.id.clone());
                 self.cancel_election_timer();
@@ -225,12 +228,14 @@ impl Node {
     pub async fn append_to_log(
         &mut self,
         server: &impl MessageSender<Message>,
-        message: String,
+        from: NodeId,
+        entry: LogEntryType,
     ) -> Result<()> {
         if matches!(self.current_role, Role::Leader) {
             self.log.push(LogEntry {
                 term: self.current_term,
-                command: message,
+                from,
+                command: entry,
             });
             self.acked_length.insert(self.id.clone(), self.log.len());
             for follower in &self.nodes {
@@ -312,10 +317,12 @@ impl Node {
         let message = if log_request.current_term == self.current_term && log_ok {
             let ack = log_request.prefix_length + log_request.suffix.len();
             self.append_entries(
+                server,
                 log_request.prefix_length,
                 log_request.commit_length,
                 log_request.suffix,
-            );
+            )
+            .await?;
 
             LogResponseMessage {
                 node_id: self.id.clone(),
@@ -337,12 +344,13 @@ impl Node {
             .await
     }
 
-    fn append_entries(
+    async fn append_entries(
         &mut self,
+        server: &impl MessageSender<Message>,
         prefix_length: usize,
         leader_commit: usize,
         suffix: Vec<LogEntry>,
-    ) {
+    ) -> Result<()> {
         if !suffix.is_empty() && self.log.len() > prefix_length {
             let index = min(self.log.len(), prefix_length + suffix.len()) - 1;
             if self.log[index].term != suffix[index - prefix_length].term {
@@ -355,9 +363,15 @@ impl Node {
             }
         }
         if leader_commit > self.commit_length {
-            // TODO: deliver the entries from commit_length to leader_commit - 1 to the application
+            // deliver the entries from commit_length to leader_commit - 1 to the application
+            for entry_index in self.commit_length..min(leader_commit - 1, self.log.len()) {
+                let entry = self.log[entry_index].clone();
+                self.deliver_log(server, entry.clone()).await?;
+            }
             self.commit_length = leader_commit;
         }
+
+        Ok(())
     }
 
     pub async fn handle_log_response(
@@ -385,7 +399,7 @@ impl Node {
                     .insert(log_response.node_id.clone(), log_response.ack);
                 self.acked_length
                     .insert(log_response.node_id, log_response.ack);
-                self.commit_log_entries();
+                self.commit_log_entries(server).await?;
             } else if follower_sent_length > 0 {
                 self.sent_length
                     .insert(log_response.node_id.clone(), follower_sent_length - 1);
@@ -401,7 +415,7 @@ impl Node {
         Ok(())
     }
 
-    fn commit_log_entries(&mut self) {
+    async fn commit_log_entries(&mut self, server: &impl MessageSender<Message>) -> Result<()> {
         while self.commit_length < self.log.len() {
             let acks = self
                 .nodes
@@ -411,14 +425,17 @@ impl Node {
                 })
                 .count();
 
-            // ceil((self.nodes.len() + 1) / 2)
-            if acks >= (self.nodes.len() + 1).div_ceil(2) {
-                // TODO: deliver log[commit_length] to the application
+            if acks >= self.quorum() {
+                // deliver log[commit_length] to the application
+                self.deliver_log(server, self.log[self.commit_length].clone())
+                    .await?;
                 self.commit_length += 1;
             } else {
                 break;
             }
         }
+
+        Ok(())
     }
 
     pub async fn handle_message(
@@ -434,6 +451,50 @@ impl Node {
         }
     }
 
+    async fn deliver_log(
+        &mut self,
+        server: &impl MessageSender<Message>,
+        log_entry: LogEntry,
+    ) -> Result<()> {
+        let log_entry_result = match log_entry.command {
+            LogEntryType::Read { key, msg_id } => {
+                let value = self.commited_log.get(&key).cloned();
+
+                LogEntryResponseType::Read {
+                    in_reply_to: msg_id,
+                    value,
+                }
+            }
+            LogEntryType::Write { key, value, msg_id } => {
+                self.commited_log.insert(key.clone(), value.clone());
+
+                LogEntryResponseType::Write {
+                    in_reply_to: msg_id,
+                }
+            }
+            LogEntryType::Cas {
+                key,
+                from,
+                to,
+                msg_id,
+            } => {
+                let written = self.commited_log.get(&key) == Some(&from);
+                if written {
+                    self.commited_log.insert(key.clone(), to.clone());
+                }
+
+                LogEntryResponseType::Cas {
+                    in_reply_to: msg_id,
+                    written,
+                }
+            }
+        };
+
+        server
+            .deliver_message(self.id.clone(), log_entry.from, log_entry_result)
+            .await
+    }
+
     async fn send_message(
         &self,
         server: &impl MessageSender<Message>,
@@ -441,5 +502,9 @@ impl Node {
         message: Message,
     ) -> Result<()> {
         server.send_node_message(self.id.clone(), to, message).await
+    }
+
+    fn quorum(&self) -> usize {
+        (self.nodes.len() + 1).div_ceil(2)
     }
 }

@@ -1,4 +1,4 @@
-use crate::server::MessageSender;
+use maelstrom::MaelstromMessageBody;
 use std::time::Duration;
 
 mod maelstrom;
@@ -21,15 +21,45 @@ async fn main() -> anyhow::Result<()> {
                     continue;
                 };
 
-                match message.body {
-                    maelstrom::MaelstromMessageBody::Node(node_message) => {
-                        if let Err(e) = node.handle_message(&server, node_message).await {
-                            eprintln!("Error handling message: {:?}", e);
-                        }
+                let result = match message.body {
+                    MaelstromMessageBody::Node(node_message) => {
+                        node.handle_message(&server, node_message).await
+                    }
+                    MaelstromMessageBody::Read { key, msg_id} => {
+                        let entry = server::LogEntryType::Read {
+                            key,
+                            msg_id,
+                        };
+
+                        node.append_to_log(&server, message.src, entry).await
+                    }
+                    MaelstromMessageBody::Write { key, value, msg_id } => {
+                        let entry = server::LogEntryType::Write {
+                            key,
+                            value,
+                            msg_id,
+                        };
+
+                        node.append_to_log(&server, message.src, entry).await
+                    }
+                    MaelstromMessageBody::Cas { key, from, to, msg_id } => {
+                        let entry = server::LogEntryType::Cas {
+                            key,
+                            from,
+                            to,
+                            msg_id,
+                        };
+
+                        node.append_to_log(&server, message.src, entry).await
                     }
                     _ => {
                         eprintln!("Unexpected message type: {:?}", message.body);
+                        continue;
                     }
+                };
+
+                if let Err(e) = result {
+                    eprintln!("Error handling message: {:?}", e);
                 }
             }
             _ = ticker.tick() => {

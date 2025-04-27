@@ -1,6 +1,6 @@
 use crate::node;
 use crate::node::NodeId;
-use crate::server::MessageSender;
+use crate::server::{LogEntryResponseType, MessageSender};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use tokio::io;
@@ -25,7 +25,52 @@ pub enum MaelstromMessageBody {
     InitOk {
         in_reply_to: usize,
     },
+    Read {
+        key: String,
+        msg_id: usize,
+    },
+    ReadOk {
+        in_reply_to: usize,
+        value: String,
+    },
+    Write {
+        key: String,
+        value: String,
+        msg_id: usize,
+    },
+    WriteOk {
+        in_reply_to: usize,
+    },
+    Cas {
+        key: String,
+        from: String,
+        to: String,
+        msg_id: usize,
+    },
+    CasOk {
+        in_reply_to: usize,
+    },
+    Error {
+        in_reply_to: usize,
+        code: ErrorCode,
+        text: Option<String>,
+    },
     Node(node::Message),
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+pub enum ErrorCode {
+    Timeout = 0,
+    NodeNotFound = 1,
+    NotSupported = 10,
+    TemporarilyUnavailable = 11,
+    MalformedRequest = 12,
+    Crash = 13,
+    Abort = 14,
+    KeyDoesNotExist = 20,
+    KeyAlreadyExists = 21,
+    PreconditionFailed = 22,
+    TxnConflict = 30,
 }
 
 pub struct MaelstromServer {}
@@ -97,5 +142,50 @@ impl MessageSender<node::Message> for MaelstromServer {
         self.send_message(from, to, MaelstromMessageBody::Node(message))
             .await
             .context("Failed to send node message")
+    }
+
+    async fn deliver_message(
+        &self,
+        from: NodeId,
+        to: NodeId,
+        message: LogEntryResponseType,
+    ) -> anyhow::Result<()> {
+        match message {
+            LogEntryResponseType::Read { in_reply_to, value } => {
+                if let Some(value) = value {
+                    let read_ok = MaelstromMessageBody::ReadOk { in_reply_to, value };
+                    self.send_message(from, to, read_ok).await?;
+                } else {
+                    let error = MaelstromMessageBody::Error {
+                        in_reply_to,
+                        code: ErrorCode::KeyDoesNotExist,
+                        text: Some("Key does not exist".to_string()),
+                    };
+                    self.send_message(from, to, error).await?;
+                }
+            }
+            LogEntryResponseType::Write { in_reply_to } => {
+                let write_ok = MaelstromMessageBody::WriteOk { in_reply_to };
+                self.send_message(from, to, write_ok).await?;
+            }
+            LogEntryResponseType::Cas {
+                in_reply_to,
+                written,
+            } => {
+                if written {
+                    let cas_ok = MaelstromMessageBody::CasOk { in_reply_to };
+                    self.send_message(from, to, cas_ok).await?;
+                } else {
+                    let error = MaelstromMessageBody::Error {
+                        in_reply_to,
+                        code: ErrorCode::PreconditionFailed,
+                        text: Some("Precondition failed".to_string()),
+                    };
+                    self.send_message(from, to, error).await?;
+                }
+            }
+        }
+
+        Ok(())
     }
 }
