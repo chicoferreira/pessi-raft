@@ -1,4 +1,4 @@
-use crate::server::{LogEntryResponseType, LogEntryType, MessageSender};
+use crate::transport::{ClientRequest, ClientResponse, RaftTransport};
 use anyhow::Result;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -43,7 +43,7 @@ pub struct LogEntry {
     pub term: TermId,
     /// The node that created this entry
     pub from: NodeId,
-    pub command: LogEntryType,
+    pub request: ClientRequest,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,7 +81,7 @@ pub struct LogResponseMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
-pub enum Message {
+pub enum RaftMessage {
     VoteRequest(VoteRequestMessage),
     VoteResponse(VoteResponseMessage),
     LogRequest(LogRequestMessage),
@@ -111,7 +111,7 @@ impl Node {
         }
     }
 
-    pub async fn start_election(&mut self, server: &impl MessageSender<Message>) -> Result<()> {
+    pub async fn start_election(&mut self, transport: &impl RaftTransport) -> Result<()> {
         self.current_role = Role::Candidate;
         self.current_term += 1;
         self.voted_for = Some(self.id.clone());
@@ -119,7 +119,7 @@ impl Node {
 
         let last_term = self.log.last().map(|e| e.term).unwrap_or(0);
 
-        let vote_request_message = Message::VoteRequest(VoteRequestMessage {
+        let vote_request_message = RaftMessage::VoteRequest(VoteRequestMessage {
             node_id: self.id.clone(),
             current_term: self.current_term,
             log_length: self.log.len(),
@@ -129,7 +129,7 @@ impl Node {
         let nodes = self.nodes.clone();
         for node in nodes {
             if node != self.id {
-                self.send_message(server, node, vote_request_message.clone())
+                self.send_message(transport, node, vote_request_message.clone())
                     .await?
             }
         }
@@ -152,7 +152,7 @@ impl Node {
 
     pub async fn handle_vote_request(
         &mut self,
-        server: &impl MessageSender<Message>,
+        transport: &impl RaftTransport,
         candidate_vote_request: VoteRequestMessage,
     ) -> Result<()> {
         if candidate_vote_request.current_term > self.current_term {
@@ -179,14 +179,14 @@ impl Node {
             self.voted_for = Some(candidate_vote_request.node_id.clone());
         }
 
-        let vote_response_message = Message::VoteResponse(VoteResponseMessage {
+        let vote_response_message = RaftMessage::VoteResponse(VoteResponseMessage {
             node_id: self.id.clone(),
             current_term: self.current_term,
             vote_granted,
         });
 
         self.send_message(
-            server,
+            transport,
             candidate_vote_request.node_id,
             vote_response_message,
         )
@@ -195,7 +195,7 @@ impl Node {
 
     pub async fn handle_vote_response(
         &mut self,
-        server: &impl MessageSender<Message>,
+        transport: &impl RaftTransport,
         vote_response: VoteResponseMessage,
     ) -> Result<()> {
         if matches!(self.current_role, Role::Candidate)
@@ -211,7 +211,7 @@ impl Node {
                     if *follower != self.id {
                         self.sent_length.insert(follower.clone(), self.log.len());
                         self.acked_length.insert(follower.clone(), 0);
-                        self.replicate_log(server, follower.clone()).await?;
+                        self.replicate_log(transport, follower.clone()).await?;
                     }
                 }
             }
@@ -227,20 +227,20 @@ impl Node {
 
     pub async fn append_to_log(
         &mut self,
-        server: &impl MessageSender<Message>,
+        transport: &impl RaftTransport,
         from: NodeId,
-        entry: LogEntryType,
+        request: ClientRequest,
     ) -> Result<()> {
         if matches!(self.current_role, Role::Leader) {
             self.log.push(LogEntry {
                 term: self.current_term,
                 from,
-                command: entry,
+                request,
             });
             self.acked_length.insert(self.id.clone(), self.log.len());
             for follower in &self.nodes {
                 if *follower != self.id {
-                    self.replicate_log(server, follower.clone()).await?;
+                    self.replicate_log(transport, follower.clone()).await?;
                 }
             }
         } else {
@@ -250,11 +250,11 @@ impl Node {
         Ok(())
     }
 
-    pub async fn tick_periodically(&mut self, server: &impl MessageSender<Message>) -> Result<()> {
+    pub async fn tick_periodically(&mut self, transport: &impl RaftTransport) -> Result<()> {
         if matches!(self.current_role, Role::Leader) {
             for follower in &self.nodes {
                 if *follower != self.id {
-                    self.replicate_log(server, follower.clone()).await?;
+                    self.replicate_log(transport, follower.clone()).await?;
                 }
             }
         }
@@ -262,18 +262,14 @@ impl Node {
         if let Some(deadline) = self.election_deadline {
             if Instant::now() >= deadline {
                 // timeout fired!
-                self.start_election(server).await?;
+                self.start_election(transport).await?;
             }
         }
 
         Ok(())
     }
 
-    async fn replicate_log(
-        &self,
-        server: &impl MessageSender<Message>,
-        node: NodeId,
-    ) -> Result<()> {
+    async fn replicate_log(&self, transport: &impl RaftTransport, node: NodeId) -> Result<()> {
         let prefix_length = self.sent_length.get(&node).copied().unwrap_or(0);
         let suffix = self.log[prefix_length..].to_vec();
 
@@ -283,7 +279,7 @@ impl Node {
             0
         };
 
-        let log_request_message = Message::LogRequest(LogRequestMessage {
+        let log_request_message = RaftMessage::LogRequest(LogRequestMessage {
             leader_id: self.id.clone(),
             current_term: self.current_term,
             prefix_length,
@@ -292,12 +288,13 @@ impl Node {
             suffix,
         });
 
-        self.send_message(server, node, log_request_message).await
+        self.send_message(transport, node, log_request_message)
+            .await
     }
 
     pub async fn handle_log_request(
         &mut self,
-        server: &impl MessageSender<Message>,
+        transport: &impl RaftTransport,
         log_request: LogRequestMessage,
     ) -> Result<()> {
         if log_request.current_term > self.current_term {
@@ -317,7 +314,7 @@ impl Node {
         let message = if log_request.current_term == self.current_term && log_ok {
             let ack = log_request.prefix_length + log_request.suffix.len();
             self.append_entries(
-                server,
+                transport,
                 log_request.prefix_length,
                 log_request.commit_length,
                 log_request.suffix,
@@ -339,14 +336,14 @@ impl Node {
             }
         };
 
-        let message = Message::LogResponse(message);
-        self.send_message(server, log_request.leader_id, message)
+        let message = RaftMessage::LogResponse(message);
+        self.send_message(transport, log_request.leader_id, message)
             .await
     }
 
     async fn append_entries(
         &mut self,
-        server: &impl MessageSender<Message>,
+        transport: &impl RaftTransport,
         prefix_length: usize,
         leader_commit: usize,
         suffix: Vec<LogEntry>,
@@ -366,7 +363,7 @@ impl Node {
             // deliver the entries from commit_length to leader_commit - 1 to the application
             for entry_index in self.commit_length..min(leader_commit - 1, self.log.len()) {
                 let entry = self.log[entry_index].clone();
-                self.deliver_log(server, entry.clone()).await?;
+                self.deliver_log(transport, entry.clone()).await?;
             }
             self.commit_length = leader_commit;
         }
@@ -376,7 +373,7 @@ impl Node {
 
     pub async fn handle_log_response(
         &mut self,
-        server: &impl MessageSender<Message>,
+        transport: &impl RaftTransport,
         log_response: LogResponseMessage,
     ) -> Result<()> {
         if log_response.current_term == self.current_term
@@ -399,11 +396,11 @@ impl Node {
                     .insert(log_response.node_id.clone(), log_response.ack);
                 self.acked_length
                     .insert(log_response.node_id, log_response.ack);
-                self.commit_log_entries(server).await?;
+                self.commit_log_entries(transport).await?;
             } else if follower_sent_length > 0 {
                 self.sent_length
                     .insert(log_response.node_id.clone(), follower_sent_length - 1);
-                self.replicate_log(server, log_response.node_id).await?;
+                self.replicate_log(transport, log_response.node_id).await?;
             }
         } else if log_response.current_term > self.current_term {
             self.current_term = log_response.current_term;
@@ -415,7 +412,7 @@ impl Node {
         Ok(())
     }
 
-    async fn commit_log_entries(&mut self, server: &impl MessageSender<Message>) -> Result<()> {
+    async fn commit_log_entries(&mut self, transport: &impl RaftTransport) -> Result<()> {
         while self.commit_length < self.log.len() {
             let acks = self
                 .nodes
@@ -427,7 +424,7 @@ impl Node {
 
             if acks >= self.quorum() {
                 // deliver log[commit_length] to the application
-                self.deliver_log(server, self.log[self.commit_length].clone())
+                self.deliver_log(transport, self.log[self.commit_length].clone())
                     .await?;
                 self.commit_length += 1;
             } else {
@@ -440,39 +437,39 @@ impl Node {
 
     pub async fn handle_message(
         &mut self,
-        server: &impl MessageSender<Message>,
-        message: Message,
+        transport: &impl RaftTransport,
+        message: RaftMessage,
     ) -> Result<()> {
         match message {
-            Message::VoteRequest(req) => self.handle_vote_request(server, req).await,
-            Message::VoteResponse(res) => self.handle_vote_response(server, res).await,
-            Message::LogRequest(req) => self.handle_log_request(server, req).await,
-            Message::LogResponse(res) => self.handle_log_response(server, res).await,
+            RaftMessage::VoteRequest(req) => self.handle_vote_request(transport, req).await,
+            RaftMessage::VoteResponse(res) => self.handle_vote_response(transport, res).await,
+            RaftMessage::LogRequest(req) => self.handle_log_request(transport, req).await,
+            RaftMessage::LogResponse(res) => self.handle_log_response(transport, res).await,
         }
     }
 
     async fn deliver_log(
         &mut self,
-        server: &impl MessageSender<Message>,
+        transport: &impl RaftTransport,
         log_entry: LogEntry,
     ) -> Result<()> {
-        let log_entry_result = match log_entry.command {
-            LogEntryType::Read { key, msg_id } => {
+        let log_entry_result = match log_entry.request {
+            ClientRequest::Read { key, msg_id } => {
                 let value = self.commited_log.get(&key).cloned();
 
-                LogEntryResponseType::Read {
+                ClientResponse::ReadOk {
                     in_reply_to: msg_id,
                     value,
                 }
             }
-            LogEntryType::Write { key, value, msg_id } => {
+            ClientRequest::Write { key, value, msg_id } => {
                 self.commited_log.insert(key.clone(), value.clone());
 
-                LogEntryResponseType::Write {
+                ClientResponse::WriteOk {
                     in_reply_to: msg_id,
                 }
             }
-            LogEntryType::Cas {
+            ClientRequest::Cas {
                 key,
                 from,
                 to,
@@ -483,25 +480,27 @@ impl Node {
                     self.commited_log.insert(key.clone(), to.clone());
                 }
 
-                LogEntryResponseType::Cas {
+                ClientResponse::CasOk {
                     in_reply_to: msg_id,
                     written,
                 }
             }
         };
 
-        server
-            .deliver_message(self.id.clone(), log_entry.from, log_entry_result)
+        transport
+            .send_client_response(self.id.clone(), log_entry.from, log_entry_result)
             .await
     }
 
     async fn send_message(
         &self,
-        server: &impl MessageSender<Message>,
+        transport: &impl RaftTransport,
         to: NodeId,
-        message: Message,
+        message: RaftMessage,
     ) -> Result<()> {
-        server.send_node_message(self.id.clone(), to, message).await
+        transport
+            .send_raft_message(self.id.clone(), to, message)
+            .await
     }
 
     fn quorum(&self) -> usize {

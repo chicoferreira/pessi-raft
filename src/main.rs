@@ -1,16 +1,16 @@
-use maelstrom::MaelstromMessageBody;
+use maelstrom::MaelstromBody;
 use std::time::Duration;
 
 mod maelstrom;
-mod node;
-mod server;
+mod raft;
+mod transport;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let server = maelstrom::MaelstromServer::new();
     let (node_id, node_ids) = server.init().await?;
 
-    let mut node = node::Node::new(node_id, node_ids);
+    let mut node = raft::Node::new(node_id, node_ids);
     let mut ticker = tokio::time::interval(Duration::from_millis(50));
 
     loop {
@@ -22,34 +22,19 @@ async fn main() -> anyhow::Result<()> {
                 };
 
                 let result = match message.body {
-                    MaelstromMessageBody::Node(node_message) => {
+                    MaelstromBody::Raft(node_message) => {
                         node.handle_message(&server, node_message).await
                     }
-                    MaelstromMessageBody::Read { key, msg_id} => {
-                        let entry = server::LogEntryType::Read {
-                            key,
-                            msg_id,
-                        };
-
-                        node.append_to_log(&server, message.src, entry).await
+                    MaelstromBody::Read { key, msg_id} => {
+                        let request = transport::ClientRequest::Read { key, msg_id };
+                        node.append_to_log(&server, message.src, request).await
                     }
-                    MaelstromMessageBody::Write { key, value, msg_id } => {
-                        let entry = server::LogEntryType::Write {
-                            key,
-                            value,
-                            msg_id,
-                        };
-
-                        node.append_to_log(&server, message.src, entry).await
+                    MaelstromBody::Write { key, value, msg_id } => {
+                        let request = transport::ClientRequest::Write { key, value, msg_id };
+                        node.append_to_log(&server, message.src, request).await
                     }
-                    MaelstromMessageBody::Cas { key, from, to, msg_id } => {
-                        let entry = server::LogEntryType::Cas {
-                            key,
-                            from,
-                            to,
-                            msg_id,
-                        };
-
+                    MaelstromBody::Cas { key, from, to, msg_id } => {
+                        let entry = transport::ClientRequest::Cas { key, from, to, msg_id };
                         node.append_to_log(&server, message.src, entry).await
                     }
                     _ => {

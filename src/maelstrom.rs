@@ -1,6 +1,6 @@
-use crate::node;
-use crate::node::NodeId;
-use crate::server::{LogEntryResponseType, MessageSender};
+use crate::raft;
+use crate::raft::NodeId;
+use crate::transport::{ClientResponse, RaftTransport};
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use tokio::io;
@@ -10,13 +10,13 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 pub struct MaelstromMessage {
     pub src: String,
     pub dest: String,
-    pub body: MaelstromMessageBody,
+    pub body: MaelstromBody,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
-pub enum MaelstromMessageBody {
+pub enum MaelstromBody {
     Init {
         msg_id: usize,
         node_id: NodeId,
@@ -55,7 +55,7 @@ pub enum MaelstromMessageBody {
         code: ErrorCode,
         text: Option<String>,
     },
-    Node(node::Message),
+    Raft(raft::RaftMessage),
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -92,7 +92,7 @@ impl MaelstromServer {
 
     pub async fn init(&self) -> anyhow::Result<(NodeId, Vec<NodeId>)> {
         let init_message = self.receive_message().await?;
-        let MaelstromMessageBody::Init {
+        let MaelstromBody::Init {
             msg_id,
             node_id,
             node_ids,
@@ -101,7 +101,7 @@ impl MaelstromServer {
             anyhow::bail!("Expected Init message, got {:?}", init_message.body);
         };
 
-        let init_ok = MaelstromMessageBody::InitOk {
+        let init_ok = MaelstromBody::InitOk {
             in_reply_to: msg_id,
         };
         self.send_message(node_id.clone(), init_message.src, init_ok)
@@ -114,7 +114,7 @@ impl MaelstromServer {
         &self,
         from: NodeId,
         to: NodeId,
-        message: MaelstromMessageBody,
+        message: MaelstromBody,
     ) -> anyhow::Result<()> {
         let message = MaelstromMessage {
             src: from,
@@ -126,37 +126,38 @@ impl MaelstromServer {
 
         let mut stdout = io::stdout();
         stdout.write_all(output.as_bytes()).await?;
+        stdout.write_all(b"\n").await?;
         stdout.flush().await?;
 
         Ok(())
     }
 }
 
-impl MessageSender<node::Message> for MaelstromServer {
-    async fn send_node_message(
+impl RaftTransport for MaelstromServer {
+    async fn send_raft_message(
         &self,
         from: NodeId,
         to: NodeId,
-        message: node::Message,
+        message: raft::RaftMessage,
     ) -> anyhow::Result<()> {
-        self.send_message(from, to, MaelstromMessageBody::Node(message))
+        self.send_message(from, to, MaelstromBody::Raft(message))
             .await
             .context("Failed to send node message")
     }
 
-    async fn deliver_message(
+    async fn send_client_response(
         &self,
         from: NodeId,
         to: NodeId,
-        message: LogEntryResponseType,
+        message: ClientResponse,
     ) -> anyhow::Result<()> {
         match message {
-            LogEntryResponseType::Read { in_reply_to, value } => {
+            ClientResponse::ReadOk { in_reply_to, value } => {
                 if let Some(value) = value {
-                    let read_ok = MaelstromMessageBody::ReadOk { in_reply_to, value };
+                    let read_ok = MaelstromBody::ReadOk { in_reply_to, value };
                     self.send_message(from, to, read_ok).await?;
                 } else {
-                    let error = MaelstromMessageBody::Error {
+                    let error = MaelstromBody::Error {
                         in_reply_to,
                         code: ErrorCode::KeyDoesNotExist,
                         text: Some("Key does not exist".to_string()),
@@ -164,19 +165,19 @@ impl MessageSender<node::Message> for MaelstromServer {
                     self.send_message(from, to, error).await?;
                 }
             }
-            LogEntryResponseType::Write { in_reply_to } => {
-                let write_ok = MaelstromMessageBody::WriteOk { in_reply_to };
+            ClientResponse::WriteOk { in_reply_to } => {
+                let write_ok = MaelstromBody::WriteOk { in_reply_to };
                 self.send_message(from, to, write_ok).await?;
             }
-            LogEntryResponseType::Cas {
+            ClientResponse::CasOk {
                 in_reply_to,
                 written,
             } => {
                 if written {
-                    let cas_ok = MaelstromMessageBody::CasOk { in_reply_to };
+                    let cas_ok = MaelstromBody::CasOk { in_reply_to };
                     self.send_message(from, to, cas_ok).await?;
                 } else {
-                    let error = MaelstromMessageBody::Error {
+                    let error = MaelstromBody::Error {
                         in_reply_to,
                         code: ErrorCode::PreconditionFailed,
                         text: Some("Precondition failed".to_string()),
