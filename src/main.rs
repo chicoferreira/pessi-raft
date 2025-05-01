@@ -4,6 +4,7 @@ use std::time::Duration;
 mod maelstrom;
 mod raft;
 mod transport;
+mod stateright;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -26,7 +27,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             _ = ticker.tick() => {
-                if let Err(e) = node.tick_periodically(&server).await {
+                if let Err(e) = node.tick_periodically(&mut server).await {
                     error!("Error handling timeout: {:?}", e);
                 }
             }

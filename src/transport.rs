@@ -1,8 +1,7 @@
 use crate::raft;
-use crate::raft::NodeId;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ClientRequest {
     Read {
         key: usize,
@@ -21,7 +20,7 @@ pub enum ClientRequest {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ClientResponse {
     ReadOk {
         in_reply_to: usize,
@@ -36,18 +35,18 @@ pub enum ClientResponse {
     },
 }
 
-pub trait RaftTransport {
+pub trait RaftTransport<Id> {
     async fn send_raft_message(
-        &self,
-        from: NodeId,
-        to: NodeId,
-        message: raft::RaftMessage,
+        &mut self,
+        from: Id,
+        to: Id,
+        message: raft::RaftMessage<Id>,
     ) -> anyhow::Result<()>;
 
     async fn send_client_response(
-        &self,
-        from: NodeId,
-        to: NodeId,
+        &mut self,
+        from: Id,
+        to: Id,
         response: ClientResponse,
     ) -> anyhow::Result<()>;
 }

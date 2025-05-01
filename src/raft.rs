@@ -5,31 +5,31 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
-pub type NodeId = String;
 pub type TermId = usize;
 
-#[derive(Debug, Default)]
-pub struct Node {
-    id: NodeId,
-    nodes: Vec<NodeId>,
+#[derive(Debug, Clone)]
+pub struct Node<Id: Clone + Hash + Eq> {
+    id: Id,
+    nodes: Vec<Id>,
     current_term: TermId,
-    voted_for: Option<NodeId>,
-    log: Vec<LogEntry>,
+    voted_for: Option<Id>,
+    log: Vec<LogEntry<Id>>,
     commit_length: usize,
     current_role: Role,
-    current_leader: Option<NodeId>,
-    votes_received: HashSet<NodeId>,
-    sent_length: HashMap<NodeId, usize>,
-    acked_length: HashMap<NodeId, usize>,
+    current_leader: Option<Id>,
+    votes_received: HashSet<Id>,
+    sent_length: HashMap<Id, usize>,
+    acked_length: HashMap<Id, usize>,
     election_deadline: Option<Instant>,
     election_timeout_range: (Duration, Duration), // min, max
     commited_log: HashMap<usize, usize>,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Role {
     #[default]
@@ -38,69 +38,69 @@ pub enum Role {
     Leader,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogEntry {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+pub struct LogEntry<Id> {
     pub term: TermId,
     /// The node that created this entry
-    pub from: NodeId,
+    pub from: Id,
     pub request: ClientRequest,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VoteRequestMessage {
-    pub node_id: NodeId,
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct VoteRequestMessage<Id> {
+    pub node_id: Id,
     pub current_term: TermId,
     pub log_length: usize,
     pub last_log_term: TermId,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VoteResponseMessage {
-    pub node_id: NodeId,
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct VoteResponseMessage<Id> {
+    pub node_id: Id,
     pub current_term: TermId,
     pub vote_granted: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogRequestMessage {
-    pub leader_id: NodeId,
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct LogRequestMessage<Id> {
+    pub leader_id: Id,
     pub current_term: TermId,
     pub prefix_length: usize,
     pub prefix_term: TermId,
     pub commit_length: usize,
-    pub suffix: Vec<LogEntry>,
+    pub suffix: Vec<LogEntry<Id>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogResponseMessage {
-    pub node_id: NodeId,
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct LogResponseMessage<Id> {
+    pub node_id: Id,
     pub current_term: TermId,
     pub ack: usize,
     pub success: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "raft_type")]
 #[serde(rename_all = "snake_case")]
-pub enum RaftMessage {
-    VoteRequest(VoteRequestMessage),
-    VoteResponse(VoteResponseMessage),
-    LogRequest(LogRequestMessage),
-    LogResponse(LogResponseMessage),
+pub enum RaftMessage<Id> {
+    VoteRequest(VoteRequestMessage<Id>),
+    VoteResponse(VoteResponseMessage<Id>),
+    LogRequest(LogRequestMessage<Id>),
+    LogResponse(LogResponseMessage<Id>),
 }
 
 #[derive(Debug, Error)]
 #[error("Raft error")]
-pub enum RaftError {
-    NotLeader { leader: Option<NodeId> },
+pub enum RaftError<Id> {
+    NotLeader { leader: Option<Id> },
     Anyhow(#[from] anyhow::Error),
 }
 
 const ELECTION_TIMEOUT_MIN: Duration = Duration::from_millis(1500);
 const ELECTION_TIMEOUT_MAX: Duration = Duration::from_millis(2000);
 
-impl Node {
-    pub fn new(id: NodeId, nodes: Vec<NodeId>) -> Self {
+impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
+    pub fn new(id: Id, nodes: Vec<Id>) -> Self {
         let mut node = Self {
             id,
             nodes,
@@ -121,7 +121,7 @@ impl Node {
         node
     }
 
-    pub async fn start_election(&mut self, transport: &impl RaftTransport) -> Result<()> {
+    pub async fn start_election(&mut self, transport: &mut impl RaftTransport<Id>) -> Result<()> {
         debug!(
             "Starting election for term {} with me as a candidate",
             self.current_term
@@ -171,8 +171,8 @@ impl Node {
 
     pub async fn handle_vote_request(
         &mut self,
-        transport: &impl RaftTransport,
-        candidate_vote_request: VoteRequestMessage,
+        transport: &mut impl RaftTransport<Id>,
+        candidate_vote_request: VoteRequestMessage<Id>,
     ) -> Result<()> {
         debug!(
             "Received vote request from {} for term {}",
@@ -220,8 +220,8 @@ impl Node {
 
     pub async fn handle_vote_response(
         &mut self,
-        transport: &impl RaftTransport,
-        vote_response: VoteResponseMessage,
+        transport: &mut impl RaftTransport<Id>,
+        vote_response: VoteResponseMessage<Id>,
     ) -> Result<()> {
         let from = vote_response.node_id;
         if matches!(self.current_role, Role::Candidate)
@@ -260,10 +260,10 @@ impl Node {
 
     pub async fn append_to_log(
         &mut self,
-        transport: &impl RaftTransport,
-        from: NodeId,
+        transport: &mut impl RaftTransport<Id>,
+        from: Id,
         request: ClientRequest,
-    ) -> std::result::Result<(), RaftError> {
+    ) -> std::result::Result<(), RaftError<Id>> {
         if matches!(self.current_role, Role::Leader) {
             self.log.push(LogEntry {
                 term: self.current_term,
@@ -285,15 +285,11 @@ impl Node {
         Ok(())
     }
 
-    pub async fn tick_periodically(&mut self, transport: &impl RaftTransport) -> Result<()> {
-        if matches!(self.current_role, Role::Leader) {
-            debug!("I am leader, replicating log to followers");
-            for follower in &self.nodes {
-                if *follower != self.id {
-                    self.replicate_log(transport, follower.clone()).await?;
-                }
-            }
-        }
+    pub async fn tick_periodically(
+        &mut self,
+        transport: &mut impl RaftTransport<Id>,
+    ) -> Result<()> {
+        self.broadcast_replicate_log(transport).await?;
 
         if let Some(deadline) = self.election_deadline {
             if Instant::now() >= deadline {
@@ -305,7 +301,21 @@ impl Node {
         Ok(())
     }
 
-    async fn replicate_log(&self, transport: &impl RaftTransport, node: NodeId) -> Result<()> {
+    pub async fn broadcast_replicate_log(
+        &mut self,
+        transport: &mut impl RaftTransport<Id>,
+    ) -> Result<()> {
+        if matches!(self.current_role, Role::Leader) {
+            for follower in &self.nodes {
+                if *follower != self.id {
+                    self.replicate_log(transport, follower.clone()).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn replicate_log(&self, transport: &mut impl RaftTransport<Id>, node: Id) -> Result<()> {
         let prefix_length = self.sent_length.get(&node).copied().unwrap_or(0);
         let suffix = self.log[prefix_length..].to_vec();
 
@@ -330,8 +340,8 @@ impl Node {
 
     pub async fn handle_log_request(
         &mut self,
-        transport: &impl RaftTransport,
-        log_request: LogRequestMessage,
+        transport: &mut impl RaftTransport<Id>,
+        log_request: LogRequestMessage<Id>,
     ) -> Result<()> {
         if log_request.current_term > self.current_term {
             self.current_term = log_request.current_term;
@@ -380,10 +390,10 @@ impl Node {
 
     async fn append_entries(
         &mut self,
-        transport: &impl RaftTransport,
+        transport: &mut impl RaftTransport<Id>,
         prefix_length: usize,
         leader_commit: usize,
-        suffix: Vec<LogEntry>,
+        suffix: Vec<LogEntry<Id>>,
     ) -> Result<()> {
         if !suffix.is_empty() && self.log.len() > prefix_length {
             let index = min(self.log.len(), prefix_length + suffix.len()) - 1;
@@ -410,8 +420,8 @@ impl Node {
 
     pub async fn handle_log_response(
         &mut self,
-        transport: &impl RaftTransport,
-        log_response: LogResponseMessage,
+        transport: &mut impl RaftTransport<Id>,
+        log_response: LogResponseMessage<Id>,
     ) -> Result<()> {
         if log_response.current_term == self.current_term
             && matches!(self.current_role, Role::Leader)
@@ -449,7 +459,7 @@ impl Node {
         Ok(())
     }
 
-    async fn commit_log_entries(&mut self, transport: &impl RaftTransport) -> Result<()> {
+    async fn commit_log_entries(&mut self, transport: &mut impl RaftTransport<Id>) -> Result<()> {
         while self.commit_length < self.log.len() {
             let acks = self
                 .nodes
@@ -474,8 +484,8 @@ impl Node {
 
     pub async fn handle_raft_message(
         &mut self,
-        transport: &impl RaftTransport,
-        message: RaftMessage,
+        transport: &mut impl RaftTransport<Id>,
+        message: RaftMessage<Id>,
     ) -> Result<()> {
         match message {
             RaftMessage::VoteRequest(req) => self.handle_vote_request(transport, req).await,
@@ -487,8 +497,8 @@ impl Node {
 
     async fn deliver_log(
         &mut self,
-        transport: &impl RaftTransport,
-        log_entry: LogEntry,
+        transport: &mut impl RaftTransport<Id>,
+        log_entry: LogEntry<Id>,
     ) -> Result<()> {
         #[rustfmt::skip]
         let log_entry_result = match log_entry.request {
@@ -497,13 +507,13 @@ impl Node {
                 ClientResponse::ReadOk { in_reply_to: msg_id, value }
             }
             ClientRequest::Write { key, value, msg_id } => {
-                self.commited_log.insert(key.clone(), value.clone());
+                self.commited_log.insert(key, value);
                 ClientResponse::WriteOk { in_reply_to: msg_id }
             }
             ClientRequest::Cas { key, from, to, msg_id } => {
                 let written = self.commited_log.get(&key) == Some(&from);
                 if written {
-                    self.commited_log.insert(key.clone(), to.clone());
+                    self.commited_log.insert(key, to);
                 }
                 ClientResponse::CasOk { in_reply_to: msg_id, written }
             }
@@ -516,20 +526,87 @@ impl Node {
 
     async fn send_message(
         &self,
-        transport: &impl RaftTransport,
-        to: NodeId,
-        message: RaftMessage,
+        transport: &mut impl RaftTransport<Id>,
+        to: Id,
+        message: RaftMessage<Id>,
     ) -> Result<()> {
         transport
             .send_raft_message(self.id.clone(), to, message)
             .await
     }
 
-    pub fn get_id(&self) -> &NodeId {
+    pub fn current_term(&self) -> TermId {
+        self.current_term
+    }
+
+    pub fn current_role(&self) -> Role {
+        self.current_role
+    }
+
+    pub fn commit_length(&self) -> usize {
+        self.commit_length
+    }
+
+    pub fn get_id(&self) -> &Id {
         &self.id
+    }
+
+    pub fn committed_log(&self) -> &HashMap<usize, usize> {
+        &self.commited_log
     }
 
     fn quorum(&self) -> usize {
         (self.nodes.len() + 1).div_ceil(2)
+    }
+}
+
+impl<Id: Clone + Default + Eq + Hash + Ord> Hash for Node<Id> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+        self.current_term.hash(state);
+        self.voted_for.hash(state);
+        self.log.hash(state);
+        self.commit_length.hash(state);
+        self.current_role.hash(state);
+        self.current_leader.hash(state);
+        hash_hashset(&self.votes_received, state);
+        hash_hashmap(&self.sent_length, state);
+        hash_hashmap(&self.acked_length, state);
+    }
+}
+
+fn hash_hashset<H, T>(set: &HashSet<T>, state: &mut H)
+where
+    H: Hasher,
+    T: Clone + Hash + Ord,
+{
+    let mut cloned: Vec<T> = set.iter().cloned().collect();
+    cloned.sort();
+    cloned.hash(state);
+}
+
+fn hash_hashmap<H, K, V>(map: &HashMap<K, V>, state: &mut H)
+where
+    H: Hasher,
+    K: Clone + Hash + Ord,
+    V: Clone + Hash + Ord,
+{
+    let mut cloned: Vec<(K, V)> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    cloned.sort_by_key(|(k, _v)| k.clone());
+    cloned.hash(state);
+}
+
+impl<Id: Clone + Default + Hash + PartialEq + Eq> PartialEq for Node<Id> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.current_term == other.current_term
+            && self.voted_for == other.voted_for
+            && self.log == other.log
+            && self.commit_length == other.commit_length
+            && self.current_role == other.current_role
+            && self.current_leader == other.current_leader
+            && self.votes_received == other.votes_received
+            && self.sent_length == other.sent_length
+            && self.acked_length == other.acked_length
     }
 }

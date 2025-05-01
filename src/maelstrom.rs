@@ -1,5 +1,5 @@
 use crate::raft;
-use crate::raft::{Node, NodeId, RaftError};
+use crate::raft::{Node, RaftError};
 use crate::transport::{ClientRequest, ClientResponse, RaftTransport};
 use anyhow::{bail, Context};
 use log::debug;
@@ -9,19 +9,19 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct MaelstromMessage {
-    pub src: NodeId,
-    pub dest: NodeId,
+    pub src: String,
+    pub dest: String,
     pub body: MaelstromBody,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 pub enum MaelstromBody {
     Init {
         msg_id: usize,
-        node_id: NodeId,
-        node_ids: Vec<NodeId>,
+        node_id: String,
+        node_ids: Vec<String>,
     },
     InitOk {
         in_reply_to: usize,
@@ -56,7 +56,7 @@ pub enum MaelstromBody {
         code: ErrorCode,
         text: Option<String>,
     },
-    Raft(raft::RaftMessage),
+    Raft(raft::RaftMessage<String>),
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -89,7 +89,7 @@ impl MaelstromServer {
     pub async fn receive_message(&mut self) -> anyhow::Result<Option<MaelstromMessage>> {
         let _ = self.reader.read_until(b'\n', &mut self.buffer).await?;
 
-        let buffer = mem::replace(&mut self.buffer, Vec::new());
+        let buffer = mem::take(&mut self.buffer);
         let input = String::from_utf8(buffer).context("Failed to read line")?;
 
         debug!("Received message: {}", input);
@@ -100,11 +100,11 @@ impl MaelstromServer {
         }
 
         let message: MaelstromMessage =
-            serde_json::from_str(&input).context("Failed to deserialize message")?;
+            serde_json::from_str(input).context("Failed to deserialize message")?;
         Ok(Some(message))
     }
 
-    pub async fn init(&mut self) -> anyhow::Result<(NodeId, Vec<NodeId>)> {
+    pub async fn init(&mut self) -> anyhow::Result<(String, Vec<String>)> {
         let init_message = self.receive_message().await?;
         let Some(init_message) = init_message else {
             bail!("Expected Init message, got None");
@@ -131,7 +131,7 @@ impl MaelstromServer {
     pub async fn handle_message(
         &mut self,
         message: anyhow::Result<Option<MaelstromMessage>>,
-        node: &mut Node,
+        node: &mut Node<String>,
     ) -> anyhow::Result<()> {
         let message = message.context("Error receiving message")?;
 
@@ -148,21 +148,18 @@ impl MaelstromServer {
         }
 
         #[rustfmt::skip]
-        let (request, msg_id, forward_body) = match message.body {
+        let (request, msg_id) = match message.body.clone() {
             MaelstromBody::Read { key, msg_id } => {
-                let req = ClientRequest::Read { key: key.clone(), msg_id };
-                let body = MaelstromBody::Read { key, msg_id };
-                (req, msg_id, body)
+                let req = ClientRequest::Read { key, msg_id };
+                (req, msg_id)
             }
             MaelstromBody::Write { key, value, msg_id } => {
-                let req = ClientRequest::Write { key: key.clone(), value: value.clone(), msg_id };
-                let body = MaelstromBody::Write { key, value, msg_id };
-                (req, msg_id, body)
+                let req = ClientRequest::Write { key, value, msg_id };
+                (req, msg_id)
             }
             MaelstromBody::Cas { key, from, to, msg_id } => {
-                let req = ClientRequest::Cas { key: key.clone(), from: from.clone(), to: to.clone(), msg_id };
-                let body = MaelstromBody::Cas { key, from, to, msg_id };
-                (req, msg_id, body)
+                let req = ClientRequest::Cas { key, from, to, msg_id };
+                (req, msg_id)
             }
             _ => {
                 bail!("Unexpected message type: {:?}", message.body);
@@ -177,7 +174,7 @@ impl MaelstromServer {
                     "Received change log message and I am not leader. Forwarding to leader: {:?}",
                     leader_id
                 );
-                self.send_message(message.src.clone(), leader_id, forward_body)
+                self.send_message(message.src.clone(), leader_id, message.body)
                     .await?;
             } else {
                 debug!(
@@ -200,8 +197,8 @@ impl MaelstromServer {
 
     pub async fn send_message(
         &self,
-        from: NodeId,
-        to: NodeId,
+        from: String,
+        to: String,
         message: MaelstromBody,
     ) -> anyhow::Result<()> {
         let message = MaelstromMessage {
@@ -221,12 +218,12 @@ impl MaelstromServer {
     }
 }
 
-impl RaftTransport for MaelstromServer {
+impl RaftTransport<String> for MaelstromServer {
     async fn send_raft_message(
-        &self,
-        from: NodeId,
-        to: NodeId,
-        message: raft::RaftMessage,
+        &mut self,
+        from: String,
+        to: String,
+        message: raft::RaftMessage<String>,
     ) -> anyhow::Result<()> {
         self.send_message(from, to, MaelstromBody::Raft(message))
             .await
@@ -234,9 +231,9 @@ impl RaftTransport for MaelstromServer {
     }
 
     async fn send_client_response(
-        &self,
-        from: NodeId,
-        to: NodeId,
+        &mut self,
+        from: String,
+        to: String,
         message: ClientResponse,
     ) -> anyhow::Result<()> {
         match message {
