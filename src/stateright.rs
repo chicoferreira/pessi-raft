@@ -1,9 +1,11 @@
 use crate::raft;
+use crate::raft::RaftEvent::LeaderElected;
 use crate::raft::{RaftError, RaftMessage, Role};
 use crate::transport::{ClientRequest, ClientResponse, RaftTransport};
 use pollster::FutureExt;
 use stateright::actor::{model_timeout, Actor, Id, Out};
 use std::borrow::Cow;
+use std::mem;
 
 struct RaftActor {
     node_ids: Vec<Id>,
@@ -50,13 +52,13 @@ where
 impl Actor for RaftActor {
     type Msg = StaterightMessage;
     type Timer = RaftTicker;
-    type State = raft::Node<Id>;
+    type State = (raft::Node<Id>, Vec<StaterightMessage>);
 
     fn on_start(&self, id: Id, o: &mut Out<Self>) -> Self::State {
         o.set_timer(RaftTicker::ReplicationTimeout, model_timeout());
         o.set_timer(RaftTicker::ElectionTimeout, model_timeout());
         let node_ids = self.node_ids.clone();
-        raft::Node::new(id, node_ids)
+        (raft::Node::new(id, node_ids), Vec::new())
     }
 
     fn on_msg(
@@ -67,21 +69,30 @@ impl Actor for RaftActor {
         msg: Self::Msg,
         o: &mut Out<Self>,
     ) {
-        let state = state.to_mut();
+        let (state, pending_requests) = state.to_mut();
 
         match msg {
             StaterightMessage::Raft(raft_msg) => {
-                state.handle_raft_message(o, raft_msg).block_on().unwrap();
+                let event = state.handle_raft_message(o, raft_msg).block_on().unwrap();
+
+                if let Some(LeaderElected { leader }) = event {
+                    let pending_requests = mem::take(pending_requests);
+                    for pending_request in pending_requests {
+                        o.send(leader, pending_request);
+                    }
+                }
             }
             StaterightMessage::ClientRequest(request_msg) => {
                 let request_msg_clone = request_msg.clone();
                 match state.append_to_log(o, src, request_msg_clone).block_on() {
-                    Err(RaftError::NotLeader {
-                        leader: Some(leader),
-                    }) => {
-                        o.send(leader, StaterightMessage::ClientRequest(request_msg));
+                    Err(RaftError::NotLeader { leader }) => {
+                        if let Some(leader) = leader {
+                            o.send(leader, StaterightMessage::ClientRequest(request_msg));
+                        } else {
+                            // No leader elected yet, so we need to store the request
+                            pending_requests.push(StaterightMessage::ClientRequest(request_msg));
+                        }
                     }
-                    Err(RaftError::NotLeader { leader: None }) => {}
                     Err(e) => {
                         panic!("Error appending to log: {:?}", e);
                     }
@@ -99,7 +110,7 @@ impl Actor for RaftActor {
         timer: &Self::Timer,
         o: &mut Out<Self>,
     ) {
-        let state = state.to_mut();
+        let (state, _pending_requests) = state.to_mut();
         match timer {
             RaftTicker::ReplicationTimeout => {
                 state.broadcast_replicate_log(o).block_on().unwrap();
@@ -119,6 +130,7 @@ mod tests {
     use crate::stateright::{RaftActor, StaterightMessage};
     use crate::transport::ClientRequest;
     use stateright::actor::{Actor, ActorModel, Envelope, Id, Network};
+    use stateright::Checker;
     use stateright::Expectation;
     use stateright::Model;
     use std::collections::HashSet;
@@ -142,33 +154,33 @@ mod tests {
                     state
                         .actor_states
                         .iter()
-                        .any(|s| s.current_role() == Role::Leader)
+                        .any(|s| s.0.current_role() == Role::Leader)
                 })
                 .property(Expectation::Sometimes, "Log Liveness", |_, state| {
-                    state.actor_states.iter().any(|s| s.commit_length() > 0)
+                    state.actor_states.iter().any(|s| s.0.commit_length() > 0)
                 })
                 .property(Expectation::Always, "Election Safety", |_, state| {
                     // at most one leader can be elected in a given term
 
                     let mut leaders_term = HashSet::new();
                     for s in &state.actor_states {
-                        if s.current_role() == Role::Leader
-                            && !leaders_term.insert(s.current_term())
+                        if s.0.current_role() == Role::Leader
+                            && !leaders_term.insert(s.0.current_term())
                         {
                             return false;
                         }
                     }
                     true
                 })
-                .property(Expectation::Always, "State Machine Safety", |_, state| {
+                .property(Expectation::Always, "Log Safety", |_, state| {
                     // if a server has applied a log entry at a given index to its state machine, no other server will
                     // ever apply a different log entry for the same index.
 
                     let mut max_commit_length = 0;
                     let mut max_commit_length_actor_id = 0;
                     for (i, s) in state.actor_states.iter().enumerate() {
-                        if s.committed_log().len() > max_commit_length {
-                            max_commit_length = s.committed_log().len();
+                        if s.0.log().len() > max_commit_length {
+                            max_commit_length = s.0.log().len();
                             max_commit_length_actor_id = i;
                         }
                     }
@@ -178,11 +190,12 @@ mod tests {
 
                     for i in 0..max_commit_length {
                         let ref_log = state.actor_states[max_commit_length_actor_id]
-                            .committed_log()
-                            .get(&i)
+                            .0
+                            .log()
+                            .get(i)
                             .unwrap();
                         for s in &state.actor_states {
-                            if let Some(log) = s.committed_log().get(&i) {
+                            if let Some(log) = s.0.log().get(i) {
                                 if log != ref_log {
                                     return false;
                                 }
@@ -197,25 +210,24 @@ mod tests {
     #[test]
     fn test_linearizability() {
         RaftModelCfg {
-            server_count: 5,
-            network: Network::new_ordered(vec![
-                Envelope {
-                    src: Id::from(0),
-                    dst: Id::from(1),
-                    msg: StaterightMessage::ClientRequest(ClientRequest::Write {
-                        key: 1,
-                        value: 42,
-                        msg_id: 1,
-                    }),
-                },
-            ]),
+            server_count: 3,
+            network: Network::new_ordered(vec![Envelope {
+                src: Id::from(0),
+                dst: Id::from(1),
+                msg: StaterightMessage::ClientRequest(ClientRequest::Write {
+                    key: 1,
+                    value: 42,
+                    msg_id: 1,
+                }),
+            }]),
         }
         .into_model()
         .checker()
-        // .threads(num_cpus::get())
-        .serve("localhost:3000");
-        // .spawn_dfs()
-        // .join()
-        // .assert_properties()
+        .target_max_depth(15)
+        .threads(num_cpus::get())
+        // .serve("localhost:3000");
+        .spawn_bfs()
+        .join()
+        .assert_properties()
     }
 }

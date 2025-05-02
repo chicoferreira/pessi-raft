@@ -141,10 +141,12 @@ impl MaelstromServer {
 
         debug!("Received message: {:?}", message);
         if let MaelstromBody::Raft(raft_msg) = message.body {
-            return node
+            // ignore event, maybe in the future we can add this to a queue and handle election event
+            let _ = node
                 .handle_raft_message(self, raft_msg)
                 .await
-                .context("Error handling raft message");
+                .context("Error handling raft message")?;
+            return Ok(());
         }
 
         #[rustfmt::skip]

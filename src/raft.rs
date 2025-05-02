@@ -96,6 +96,10 @@ pub enum RaftError<Id> {
     Anyhow(#[from] anyhow::Error),
 }
 
+pub enum RaftEvent<Id> {
+    LeaderElected { leader: Id },
+}
+
 const ELECTION_TIMEOUT_MIN: Duration = Duration::from_millis(1500);
 const ELECTION_TIMEOUT_MAX: Duration = Duration::from_millis(2000);
 
@@ -173,7 +177,7 @@ impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
         &mut self,
         transport: &mut impl RaftTransport<Id>,
         candidate_vote_request: VoteRequestMessage<Id>,
-    ) -> Result<()> {
+    ) -> Result<Option<RaftEvent<Id>>> {
         debug!(
             "Received vote request from {} for term {}",
             candidate_vote_request.node_id, candidate_vote_request.current_term
@@ -216,13 +220,16 @@ impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
             vote_response_message,
         )
         .await
+        .map(|_| None)
     }
 
     pub async fn handle_vote_response(
         &mut self,
         transport: &mut impl RaftTransport<Id>,
         vote_response: VoteResponseMessage<Id>,
-    ) -> Result<()> {
+    ) -> Result<Option<RaftEvent<Id>>> {
+        let mut event = None;
+
         let from = vote_response.node_id;
         if matches!(self.current_role, Role::Candidate)
             && vote_response.current_term == self.current_term
@@ -244,6 +251,10 @@ impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
                         self.replicate_log(transport, follower.clone()).await?;
                     }
                 }
+
+                event = Some(RaftEvent::LeaderElected {
+                    leader: self.id.clone(),
+                });
             }
         } else if vote_response.current_term > self.current_term {
             debug!("Received vote response with higher term, becoming follower");
@@ -255,7 +266,7 @@ impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
             debug!("Received negative vote response from {from}");
         }
 
-        Ok(())
+        Ok(event)
     }
 
     pub async fn append_to_log(
@@ -342,16 +353,22 @@ impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
         &mut self,
         transport: &mut impl RaftTransport<Id>,
         log_request: LogRequestMessage<Id>,
-    ) -> Result<()> {
+    ) -> Result<Option<RaftEvent<Id>>> {
         if log_request.current_term > self.current_term {
             self.current_term = log_request.current_term;
             self.voted_for = None;
             self.cancel_election_timer()
         }
+
+        let mut event = None;
         if log_request.current_term == self.current_term {
             self.current_role = Role::Follower;
             self.current_leader = Some(log_request.leader_id.clone());
             self.start_election_timer();
+
+            event = Some(RaftEvent::LeaderElected {
+                leader: log_request.leader_id.clone(),
+            });
         }
 
         let log_ok = (self.log.len() >= log_request.prefix_length)
@@ -385,7 +402,9 @@ impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
 
         let message = RaftMessage::LogResponse(message);
         self.send_message(transport, log_request.leader_id, message)
-            .await
+            .await?;
+
+        Ok(event)
     }
 
     async fn append_entries(
@@ -422,7 +441,7 @@ impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
         &mut self,
         transport: &mut impl RaftTransport<Id>,
         log_response: LogResponseMessage<Id>,
-    ) -> Result<()> {
+    ) -> Result<Option<RaftEvent<Id>>> {
         if log_response.current_term == self.current_term
             && matches!(self.current_role, Role::Leader)
         {
@@ -456,7 +475,7 @@ impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
             self.cancel_election_timer();
         }
 
-        Ok(())
+        Ok(None)
     }
 
     async fn commit_log_entries(&mut self, transport: &mut impl RaftTransport<Id>) -> Result<()> {
@@ -486,7 +505,7 @@ impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
         &mut self,
         transport: &mut impl RaftTransport<Id>,
         message: RaftMessage<Id>,
-    ) -> Result<()> {
+    ) -> Result<Option<RaftEvent<Id>>> {
         match message {
             RaftMessage::VoteRequest(req) => self.handle_vote_request(transport, req).await,
             RaftMessage::VoteResponse(res) => self.handle_vote_response(transport, res).await,
@@ -551,8 +570,8 @@ impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
         &self.id
     }
 
-    pub fn committed_log(&self) -> &HashMap<usize, usize> {
-        &self.commited_log
+    pub fn log(&self) -> &Vec<LogEntry<Id>> {
+        &self.log
     }
 
     fn quorum(&self) -> usize {
