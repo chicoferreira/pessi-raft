@@ -3,7 +3,7 @@ use crate::raft::RaftEvent::LeaderElected;
 use crate::raft::{RaftError, RaftMessage, Role};
 use crate::transport::{ClientRequest, ClientResponse, RaftTransport};
 use pollster::FutureExt;
-use stateright::actor::{model_timeout, Actor, Id, Out};
+use stateright::actor::{Actor, Id, Out, model_timeout};
 use std::borrow::Cow;
 use std::mem;
 
@@ -129,10 +129,10 @@ mod tests {
     use crate::raft::Role;
     use crate::stateright::{RaftActor, StaterightMessage};
     use crate::transport::ClientRequest;
-    use stateright::actor::{Actor, ActorModel, Envelope, Id, Network};
     use stateright::Checker;
     use stateright::Expectation;
     use stateright::Model;
+    use stateright::actor::{Actor, ActorModel, Envelope, Id, Network};
     use std::collections::HashSet;
 
     #[derive(Clone)]
