@@ -81,3 +81,22 @@ a falhas assertivas que comprometam as propriedades de segurança do mesmo.
   #text(fill: red)[A FAZER (sem criptografia)]
 ]
 
+#fault_chapter[
+  Negação de Serviço por Spam de Eleições
+][
+  Cada _follower_ tem uma _timer_ para dar _timeout_ e começar uma eleição, quando não recebe atualizações de um líder. Um nodo malicioso pode simplesmente ignorar esse _timer_ e começar sempre uma nova eleição. A cada momento desses, o nodo malicioso, incrementa o seu _term_ e tenta eleger-se como líder. Como o seu _term_ é maior que o do líder, todos os nodos (incluindo o líder) votam nele, e ele passa a ser o líder.
+
+  Este nodo malicioso pode continuar a fazer isto indefinidamente, sempre que um líder é eleito.
+][
+  Como não há um líder estável, não há tempo suficiente para replicar as entradas no log, então o sistema não consegue fazer progresso.
+][
+  #text(fill: red)[A FAZER]
+][
+  Para este problema, não há uma solução concreta, e teremos que recorrer a soluções estatísticas.
+
+  Uma solução possível é ignorar começos de eleições demasiado cedo, por exemplo, se um _term_ começou há menos de 1 minuto, ignorar o começo dele. No entanto, esta solução pode fazer com que o sistema volte demasiado tempo a voltar ao normal caso o líder realmente morra nesse espaço de tempo.
+
+  Outra solução possível é limitar o número de eleições que um nodo pode iniciar num dado espaço de tempo, por exemplo, 1 eleição por hora.
+][
+  #text(fill: red)[A FAZER]
+]
