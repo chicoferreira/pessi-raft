@@ -1,10 +1,10 @@
 use log::error;
 use std::time::Duration;
 
+mod fault;
 mod maelstrom;
 mod raft;
 mod transport;
-mod stateright;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

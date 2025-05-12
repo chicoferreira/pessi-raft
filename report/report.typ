@@ -96,7 +96,7 @@ a falhas assertivas que comprometam as propriedades de segurança do mesmo.
 
   Este nodo malicioso pode continuar a fazer isto indefinidamente, sempre que um líder é eleito.
 ][
-  Como não há um líder estável, não há tempo suficiente para replicar as entradas no log, então o sistema não consegue fazer progresso.
+  Como não há um líder estável, a propriedade de _liveness_ não é respeitada, isto é, o sistema não consegue fazer progresso, visto que não há tempo suficiente para replicar as entradas no log.
 ][
   #text(fill: red)[A FAZER]
 ][
@@ -113,7 +113,7 @@ a falhas assertivas que comprometam as propriedades de segurança do mesmo.
   Enviar mensagens de _log_ sem ser o líder
 ][
   Um nodo malicioso pode enviar mensagens de _log_ (`AppendEntries`) sem ser o líder. Na implementação atual, sempre que um nodo
-  recebe uma mensagem de _log_, verifica se o seu termo é maior ou igual ao termo da mensagem, e se for, declara imediatamente o nodo como líder.
+  recebe uma mensagem de _log_, verifica se o seu `term` é maior ou igual ao `term` da mensagem, e se for, declara imediatamente o nodo emissor como líder, caso ainda não seja.
 ][
   Qualquer nodo pode tornar-se líder, mesmo não tendo recebido votações positivas de outros nodos.
 ][
