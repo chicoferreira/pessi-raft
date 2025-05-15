@@ -29,6 +29,10 @@
 Neste trabalho prático, pretendemos identificar e analisar possíveis vulnerabilidades do algoritmo Raft perante
 a falhas assertivas que comprometam as propriedades de segurança do mesmo.
 
+```
+maelstrom.jar test -w lin-kv --bin .\target\release\pessi-raft.exe --time-limit 60 --node-count 3 --concurrency 10n --rate 100 --nemesis partition --nemesis-interval 3
+```
+
 #let fault_counter = counter("fault")
 
 #let fault_subchapter_text_content(title, content) = grid(
@@ -131,7 +135,7 @@ a falhas assertivas que comprometam as propriedades de segurança do mesmo.
 ][
   Um nodo líder malicioso pode incrementar o `commit_index` sem ter recebido confirmação da maioria dos nodos.
 ][
-  Os _logs_ podem não estar atualizados numa maioria dos nodos, o que faria com que caso o líder falhasse, dados seriam perdidos. Quebra o princípio de *?????*. #text(fill: red)[METER PRINCÍPIO].
+  Os _logs_ podem não estar atualizados numa maioria dos nodos, o que faria com que caso o líder falhasse, dados seriam perdidos. Quebra o princípio de _safety_.
 ][
   #text(fill: red)[A FAZER]
 ][

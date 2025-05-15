@@ -1,13 +1,19 @@
 use crate::fault::actor::RaftActor;
 use crate::raft::Role;
-use stateright::Expectation::{Always, Eventually};
 use stateright::actor::{ActorModel, ActorModelState};
+use stateright::Expectation::{Always, Eventually};
 use std::collections::HashSet;
+use std::fmt::Debug;
+use std::hash::Hash;
 
-pub fn election_safety_property<Cfg>(
-    _actor: &ActorModel<RaftActor, Cfg>,
-    state: &ActorModelState<RaftActor>,
-) -> bool {
+pub fn election_safety_property<Cfg, OtherMsg, OtherState>(
+    _actor: &ActorModel<RaftActor<OtherMsg, OtherState>, Cfg>,
+    state: &ActorModelState<RaftActor<OtherMsg, OtherState>>,
+) -> bool
+where
+    OtherMsg: Clone + Debug + Eq + Hash,
+    OtherState: Default + Clone + Debug + Hash + PartialEq,
+{
     // at most one leader can be elected in a given term
 
     let mut leaders_term = HashSet::new();
@@ -19,10 +25,14 @@ pub fn election_safety_property<Cfg>(
     true
 }
 
-pub fn log_safety_property<Cfg>(
-    _actor: &ActorModel<RaftActor, Cfg>,
-    state: &ActorModelState<RaftActor>,
-) -> bool {
+pub fn log_safety_property<Cfg, OtherMsg, OtherState>(
+    _actor: &ActorModel<RaftActor<OtherMsg, OtherState>, Cfg>,
+    state: &ActorModelState<RaftActor<OtherMsg, OtherState>>,
+) -> bool
+where
+    OtherMsg: Clone + Debug + Eq + Hash,
+    OtherState: Default + Clone + Debug + Hash + PartialEq,
+{
     // if a server has applied a log entry at a given index to its state machine, no other server will
     // ever apply a different log entry for the same index.
 
@@ -55,26 +65,38 @@ pub fn log_safety_property<Cfg>(
     true
 }
 
-pub fn log_liveness_property<Cfg>(
-    _actor: &ActorModel<RaftActor, Cfg>,
-    state: &ActorModelState<RaftActor>,
-) -> bool {
+pub fn log_liveness_property<Cfg, OtherMsg, OtherState>(
+    _actor: &ActorModel<RaftActor<OtherMsg, OtherState>, Cfg>,
+    state: &ActorModelState<RaftActor<OtherMsg, OtherState>>,
+) -> bool
+where
+    OtherMsg: Clone + Debug + Eq + Hash,
+    OtherState: Default + Clone + Debug + Hash + PartialEq,
+{
     state.actor_states.iter().any(|s| s.0.commit_length() > 0)
 }
 
-pub fn election_liveness_property<Cfg>(
-    _actor: &ActorModel<RaftActor, Cfg>,
-    state: &ActorModelState<RaftActor>,
-) -> bool {
+pub fn election_liveness_property<Cfg, OtherMsg, OtherState>(
+    _actor: &ActorModel<RaftActor<OtherMsg, OtherState>, Cfg>,
+    state: &ActorModelState<RaftActor<OtherMsg, OtherState>>,
+) -> bool
+where
+    OtherMsg: Clone + Debug + Eq + Hash,
+    OtherState: Default + Clone + Debug + Hash + PartialEq,
+{
     state
         .actor_states
         .iter()
         .any(|s| s.0.current_role() == Role::Leader)
 }
 
-pub fn add_raft_properties<Cfg>(
-    target: ActorModel<RaftActor, Cfg, ()>,
-) -> ActorModel<RaftActor, Cfg> {
+pub fn add_raft_properties<Cfg, OtherMsg, OtherState>(
+    target: ActorModel<RaftActor<OtherMsg, OtherState>, Cfg, ()>,
+) -> ActorModel<RaftActor<OtherMsg, OtherState>, Cfg>
+where
+    OtherMsg: Clone + Debug + Eq + Hash,
+    OtherState: Default + Clone + Debug + Hash + PartialEq,
+{
     target
         .property(Eventually, "Election Liveness", election_liveness_property)
         .property(Eventually, "Log Liveness", log_liveness_property)

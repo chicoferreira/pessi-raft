@@ -9,13 +9,32 @@ use stateright::actor::{model_timeout, Actor, ActorModel, Id, Out};
 use std::borrow::Cow;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::marker::PhantomData;
 use std::mem;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
-pub struct RaftActor {
-    pub fault_injector: Arc<dyn FaultInjector + Send + Sync>,
+pub struct RaftActor<OtherMsg, OtherState> {
+    pub fault_injector: Arc<dyn FaultInjector<OtherMsg, OtherState> + Send + Sync>,
     pub node_ids: Vec<Id>,
+    _pd: PhantomData<(OtherMsg, OtherState)>,
+}
+
+impl<OtherMsg, OtherState> RaftActor<OtherMsg, OtherState>
+where
+    OtherMsg: Clone + Debug + Eq + Hash,
+    OtherState: Default + Clone + Debug + Hash + PartialEq,
+{
+    pub fn new(
+        node_ids: Vec<Id>,
+        fault_injector: impl FaultInjector<OtherMsg, OtherState> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            fault_injector: Arc::new(fault_injector),
+            node_ids,
+            _pd: PhantomData,
+        }
+    }
 }
 
 #[derive(Clone, Hash, PartialEq, Eq, Debug)]
@@ -25,19 +44,21 @@ pub enum RaftTicker {
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub enum StaterightMessage {
+pub enum StaterightMessage<Other> {
     Raft(RaftMessage<Id>),
     ClientResponse(ClientResponse),
     ClientRequest(ClientRequest),
+    // Other message to be able to fix implementations be able to add their own messages
+    Other(Other),
 }
 
-impl<A> RaftTransport<Id> for Out<A>
+impl<A, Other> RaftTransport<Id> for Out<A>
 where
-    A: Actor<Msg = StaterightMessage>,
+    A: Actor<Msg = StaterightMessage<Other>>,
 {
     async fn send_raft_message(
         &mut self,
-        _from: Id,
+        _: Id,
         to: Id,
         message: RaftMessage<Id>,
     ) -> anyhow::Result<()> {
@@ -47,25 +68,31 @@ where
 
     async fn send_client_response(
         &mut self,
-        _from: Id,
+        _: Id,
         to: Id,
-        response: ClientResponse,
+        res: ClientResponse,
     ) -> anyhow::Result<()> {
-        self.send(to, StaterightMessage::ClientResponse(response));
+        self.send(to, StaterightMessage::ClientResponse(res));
         Ok(())
     }
 }
 
-impl Actor for RaftActor {
-    type Msg = StaterightMessage;
+impl<OtherMsg: Clone + Debug + Eq + Hash, OtherState: Clone + Debug + Hash + PartialEq + Default>
+    Actor for RaftActor<OtherMsg, OtherState>
+{
+    type Msg = StaterightMessage<OtherMsg>;
     type Timer = RaftTicker;
-    type State = (raft::Node<Id>, Vec<StaterightMessage>);
+    type State = (raft::Node<Id>, Vec<StaterightMessage<OtherMsg>>, OtherState);
 
     fn on_start(&self, id: Id, o: &mut Out<Self>) -> Self::State {
         o.set_timer(RaftTicker::ReplicationTimeout, model_timeout());
         o.set_timer(RaftTicker::ElectionTimeout, model_timeout());
         let node_ids = self.node_ids.clone();
-        (raft::Node::new(id, node_ids), Vec::new())
+        (
+            raft::Node::new(id, node_ids),
+            Vec::new(),
+            OtherState::default(),
+        )
     }
 
     fn on_msg(
@@ -76,9 +103,12 @@ impl Actor for RaftActor {
         msg: Self::Msg,
         out: &mut Out<Self>,
     ) {
-        let (state, pending_requests) = state.to_mut();
+        let (state, pending_requests, other_state) = state.to_mut();
 
-        let msg = match self.fault_injector.inject_on_msg(state, msg, out) {
+        let msg = match self
+            .fault_injector
+            .inject_on_msg(state, other_state, msg, out)
+        {
             ControlFlow::Continue(msg) => msg,
             ControlFlow::Break(()) => return,
         };
@@ -87,7 +117,16 @@ impl Actor for RaftActor {
             StaterightMessage::Raft(raft_msg) => {
                 let event = state.handle_raft_message(out, raft_msg).block_on().unwrap();
 
-                if let Some(LeaderElected { leader }) = event {
+                if let Some(event) = event {
+                    let event = match self
+                        .fault_injector
+                        .inject_on_event(state, other_state, event)
+                    {
+                        ControlFlow::Continue(event) => event,
+                        ControlFlow::Break(()) => return,
+                    };
+
+                    let LeaderElected { leader } = event;
                     let pending_requests = mem::take(pending_requests);
                     for pending_request in pending_requests {
                         out.send(leader, pending_request);
@@ -111,7 +150,7 @@ impl Actor for RaftActor {
                     Ok(()) => {}
                 }
             }
-            StaterightMessage::ClientResponse(_) => {}
+            _ => {}
         }
     }
 
@@ -122,9 +161,13 @@ impl Actor for RaftActor {
         timer: &Self::Timer,
         o: &mut Out<Self>,
     ) {
-        let (state, _pending_requests) = state.to_mut();
+        let (state, _pending_requests, other_state) = state.to_mut();
 
-        if self.fault_injector.inject_on_timeout(state).is_break() {
+        if self
+            .fault_injector
+            .inject_on_timeout(state, other_state)
+            .is_break()
+        {
             return;
         }
 
@@ -141,7 +184,11 @@ impl Actor for RaftActor {
     }
 }
 
-pub fn create_raft_actor_model() -> ActorModel<RaftActor> {
+pub fn create_raft_actor_model<OtherMsg, OtherState>() -> ActorModel<RaftActor<OtherMsg, OtherState>>
+where
+    OtherMsg: Clone + Debug + Eq + Hash,
+    OtherState: Clone + Debug + Hash + PartialEq + Default,
+{
     property::add_raft_properties(ActorModel::new((), ()))
 }
 
@@ -160,7 +207,7 @@ mod tests {
         let network = Network::new_ordered(vec![Envelope {
             src: Id::from(0),
             dst: Id::from(1),
-            msg: StaterightMessage::ClientRequest(ClientRequest::Write {
+            msg: StaterightMessage::<()>::ClientRequest(ClientRequest::Write {
                 key: 1,
                 value: 42,
                 msg_id: 1,
@@ -170,11 +217,12 @@ mod tests {
         let server_count = 3;
         let peers: Vec<Id> = Id::vec_from(0..server_count);
 
-        create_raft_actor_model()
+        create_raft_actor_model::<(), ()>()
             // .max_crashes((self.server_count - 1) / 2)
             .actors((0..server_count).map(|_| RaftActor {
                 fault_injector: Arc::new(NoFaultInjector),
                 node_ids: peers.clone(),
+                _pd: Default::default(),
             }))
             .init_network(network)
             .checker()

@@ -2,22 +2,29 @@ use crate::fault::actor::{RaftActor, StaterightMessage};
 use crate::fault::injector::FaultInjector;
 use crate::raft::{Node, RaftMessage, VoteResponseMessage};
 use stateright::actor::{Id, Out};
+use std::fmt::Debug;
+use std::hash::Hash;
 use std::ops::ControlFlow;
 
-struct DoubleVoteFaultInjector;
+pub struct DoubleVoteFaultInjector;
 
-impl FaultInjector for DoubleVoteFaultInjector {
+impl<OtherMsg, OtherState> FaultInjector<OtherMsg, OtherState> for DoubleVoteFaultInjector
+where
+    OtherMsg: Clone + Debug + Eq + Hash,
+    OtherState: Default + Clone + Debug + Hash + PartialEq,
+{
     fn inject_on_msg(
         &self,
-        state: &mut Node<Id>,
-        msg: StaterightMessage,
-        out: &mut Out<RaftActor>,
-    ) -> ControlFlow<(), StaterightMessage> {
+        node_state: &mut Node<Id>,
+        _other_state: &mut OtherState,
+        msg: StaterightMessage<OtherMsg>,
+        out: &mut Out<RaftActor<OtherMsg, OtherState>>,
+    ) -> ControlFlow<(), StaterightMessage<OtherMsg>> {
         if let StaterightMessage::Raft(RaftMessage::VoteRequest(vote_request_message)) = msg {
             // if the message is a vote request, always accept
             let vote_response_message = RaftMessage::VoteResponse(VoteResponseMessage {
-                node_id: state.get_id().clone(),
-                current_term: state.current_term(),
+                node_id: node_state.get_id().clone(),
+                current_term: node_state.current_term(),
                 vote_granted: true,
             });
             out.send(
@@ -38,25 +45,15 @@ mod tests {
     use stateright::Checker;
     use stateright::DiscoveryClassification::Counterexample;
     use stateright::Model;
-    use std::sync::Arc;
 
     #[test]
     fn test_double_vote_fault() {
         let peers: Vec<Id> = Id::vec_from(0..3);
 
         let actors = vec![
-            RaftActor {
-                fault_injector: Arc::new(NoFaultInjector),
-                node_ids: peers.clone(),
-            },
-            RaftActor {
-                fault_injector: Arc::new(NoFaultInjector),
-                node_ids: peers.clone(),
-            },
-            RaftActor {
-                fault_injector: Arc::new(DoubleVoteFaultInjector),
-                node_ids: peers.clone(),
-            },
+            RaftActor::<(), ()>::new(peers.clone(), NoFaultInjector),
+            RaftActor::new(peers.clone(), NoFaultInjector),
+            RaftActor::new(peers.clone(), DoubleVoteFaultInjector),
         ];
 
         let discovery = create_raft_actor_model()
