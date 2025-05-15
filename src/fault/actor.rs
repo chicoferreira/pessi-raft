@@ -118,13 +118,14 @@ impl<OtherMsg: Clone + Debug + Eq + Hash, OtherState: Clone + Debug + Hash + Par
                 let event = state.handle_raft_message(out, raft_msg).block_on().unwrap();
 
                 if let Some(event) = event {
-                    let event = match self
-                        .fault_injector
-                        .inject_on_event(state, other_state, event)
-                    {
-                        ControlFlow::Continue(event) => event,
-                        ControlFlow::Break(()) => return,
-                    };
+                    let event =
+                        match self
+                            .fault_injector
+                            .inject_on_event(state, other_state, out, event)
+                        {
+                            ControlFlow::Continue(event) => event,
+                            ControlFlow::Break(()) => return,
+                        };
 
                     let LeaderElected { leader } = event;
                     let pending_requests = mem::take(pending_requests);

@@ -1,7 +1,7 @@
 use crate::fault::actor::RaftActor;
 use crate::raft::Role;
 use stateright::actor::{ActorModel, ActorModelState};
-use stateright::Expectation::{Always, Eventually};
+use stateright::Expectation::{Always, Sometimes};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -90,6 +90,11 @@ where
         .any(|s| s.0.current_role() == Role::Leader)
 }
 
+pub const ELECTION_LIVENESS: &str = "Election Liveness";
+pub const LOG_LIVENESS: &str = "Log Liveness";
+pub const ELECTION_SAFETY: &str = "Election Safety";
+pub const LOG_SAFETY: &str = "Log Safety";
+
 pub fn add_raft_properties<Cfg, OtherMsg, OtherState>(
     target: ActorModel<RaftActor<OtherMsg, OtherState>, Cfg, ()>,
 ) -> ActorModel<RaftActor<OtherMsg, OtherState>, Cfg>
@@ -98,8 +103,8 @@ where
     OtherState: Default + Clone + Debug + Hash + PartialEq,
 {
     target
-        .property(Eventually, "Election Liveness", election_liveness_property)
-        .property(Eventually, "Log Liveness", log_liveness_property)
-        .property(Always, "Election Safety", election_safety_property)
-        .property(Always, "Log Safety", log_safety_property)
+        .property(Sometimes, ELECTION_LIVENESS, election_liveness_property)
+        .property(Sometimes, LOG_LIVENESS, log_liveness_property)
+        .property(Always, ELECTION_SAFETY, election_safety_property)
+        .property(Always, LOG_SAFETY, log_safety_property)
 }

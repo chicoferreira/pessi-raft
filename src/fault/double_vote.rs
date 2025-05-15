@@ -42,6 +42,7 @@ mod tests {
     use super::*;
     use crate::fault::actor::{create_raft_actor_model, RaftActor};
     use crate::fault::injector::NoFaultInjector;
+    use crate::fault::property;
     use stateright::Checker;
     use stateright::DiscoveryClassification::Counterexample;
     use stateright::Model;
@@ -63,7 +64,7 @@ mod tests {
             .threads(num_cpus::get())
             .spawn_bfs()
             .join()
-            .discovery_classification("Election Safety");
+            .discovery_classification(property::ELECTION_SAFETY);
 
         assert!(matches!(discovery, Counterexample));
     }

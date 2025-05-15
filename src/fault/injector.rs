@@ -12,28 +12,32 @@ where
 {
     fn inject_on_msg(
         &self,
-        _node_state: &mut Node<Id>,
-        _other_state: &mut OtherState,
+        node_state: &mut Node<Id>,
+        other_state: &mut OtherState,
         msg: StaterightMessage<OtherMsg>,
-        _out: &mut Out<RaftActor<OtherMsg, OtherState>>,
+        out: &mut Out<RaftActor<OtherMsg, OtherState>>,
     ) -> ControlFlow<(), StaterightMessage<OtherMsg>> {
+        let _ = (node_state, other_state, out);
         ControlFlow::Continue(msg)
     }
 
     fn inject_on_timeout(
         &self,
-        _node_state: &mut Node<Id>,
-        _other_state: &mut OtherState,
+        node_state: &mut Node<Id>,
+        other_state: &mut OtherState,
     ) -> ControlFlow<()> {
+        let _ = (node_state, other_state);
         ControlFlow::Continue(())
     }
 
     fn inject_on_event(
         &self,
-        _node_state: &mut Node<Id>,
-        _other_state: &mut OtherState,
+        node_state: &mut Node<Id>,
+        other_state: &mut OtherState,
+        out: &mut Out<RaftActor<OtherMsg, OtherState>>,
         event: RaftEvent<Id>,
     ) -> ControlFlow<(), RaftEvent<Id>> {
+        let _ = (node_state, other_state, out);
         ControlFlow::Continue(event)
     }
 }

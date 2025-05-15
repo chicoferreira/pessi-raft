@@ -21,7 +21,7 @@ pub struct Node<Id: Clone + Hash + Eq> {
     commit_length: usize,
     current_role: Role,
     current_leader: Option<Id>,
-    votes_received: HashSet<Id>,
+    votes_received: Vec<Id>,
     sent_length: HashMap<Id, usize>,
     acked_length: HashMap<Id, usize>,
     election_deadline: Option<Instant>,
@@ -114,7 +114,7 @@ impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
             commit_length: 0,
             current_role: Role::Follower,
             current_leader: None,
-            votes_received: HashSet::new(),
+            votes_received: Vec::new(),
             sent_length: HashMap::new(),
             acked_length: HashMap::new(),
             election_deadline: None,
@@ -133,7 +133,8 @@ impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
         self.current_role = Role::Candidate;
         self.current_term += 1;
         self.voted_for = Some(self.id.clone());
-        self.votes_received.insert(self.id.clone());
+        self.votes_received.clear();
+        self.votes_received.push(self.id.clone());
 
         let last_term = self.log.last().map(|e| e.term).unwrap_or(0);
 
@@ -237,7 +238,11 @@ impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
         {
             debug!("Received positive vote from {from} to become a leader");
 
-            self.votes_received.insert(from);
+            if self.votes_received.contains(&from) {
+                return Ok(event);
+            }
+
+            self.votes_received.push(from);
             let received_votes = self.votes_received.len();
             if received_votes >= self.quorum() {
                 debug!("Received quorum votes ({received_votes} votes), becoming leader");
@@ -574,6 +579,14 @@ impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
         &self.log
     }
 
+    pub fn nodes(&self) -> &Vec<Id> {
+        &self.nodes
+    }
+
+    pub fn get_votes_received(&self) -> &Vec<Id> {
+        &self.votes_received
+    }
+
     fn quorum(&self) -> usize {
         (self.nodes.len() + 1).div_ceil(2)
     }
@@ -588,7 +601,7 @@ impl<Id: Clone + Default + Eq + Hash + Ord> Hash for Node<Id> {
         self.commit_length.hash(state);
         self.current_role.hash(state);
         self.current_leader.hash(state);
-        hash_hashset(&self.votes_received, state);
+        self.votes_received.hash(state);
         hash_hashmap(&self.sent_length, state);
         hash_hashmap(&self.acked_length, state);
     }

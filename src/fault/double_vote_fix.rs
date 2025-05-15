@@ -1,10 +1,9 @@
 use crate::fault::actor::{RaftActor, StaterightMessage};
+use crate::fault::double_vote_fix::DoubleVoteFixMessage::ElectedBy;
 use crate::fault::injector::FaultInjector;
-use crate::raft::{Node, TermId};
-use pollster::FutureExt;
+use crate::raft::{Node, RaftEvent, RaftMessage, TermId};
 use stateright::actor::{Id, Out};
 use std::ops::ControlFlow;
-use DoubleVoteFixMessage::ElectedBy;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum DoubleVoteFixMessage {
@@ -36,63 +35,120 @@ impl FaultInjector<DoubleVoteFixMessage, DoubleVoteFixState> for DoubleVoteFixIn
         state: &mut Node<Id>,
         other_state: &mut DoubleVoteFixState,
         msg: StaterightMessage<DoubleVoteFixMessage>,
-        out: &mut Out<RaftActor<DoubleVoteFixMessage, DoubleVoteFixState>>,
+        _out: &mut Out<RaftActor<DoubleVoteFixMessage, DoubleVoteFixState>>,
     ) -> ControlFlow<(), StaterightMessage<DoubleVoteFixMessage>> {
-        if let StaterightMessage::Other(ElectedBy { leader, term, by }) = msg {
-            for id in by {
-                if other_state
-                    .votes
-                    .iter()
-                    .find(|vote| vote.from == id && vote.term == term && vote.to != leader)
-                    .is_some()
-                {
-                    // the node already voted for someone else in this term
-                    // add to blacklist
-                    other_state.blacklist.push(id.clone());
+        // Check if the message is from a blacklisted node
+        if let StaterightMessage::Raft(msg) = &msg {
+            let from = match msg {
+                RaftMessage::VoteRequest(msg) => msg.node_id,
+                RaftMessage::VoteResponse(msg) => msg.node_id,
+                RaftMessage::LogRequest(msg) => msg.leader_id,
+                RaftMessage::LogResponse(msg) => msg.node_id,
+            };
 
-                    // start a new election
-                    state.start_election(out).block_on().unwrap();
-                }
-                other_state.votes.push(Vote {
-                    term,
-                    from: id,
-                    to: leader,
-                });
+            if other_state.blacklist.iter().any(|&id| id == from) {
+                // The node is blacklisted, ignore the message
+                return ControlFlow::Break(());
             }
-            return ControlFlow::Break(());
+        }
+
+        // When the node receives a vote response, and it is positive,
+        // register the vote in the `other_state`
+        if let StaterightMessage::Other(ElectedBy { leader, term, by }) = &msg {
+            for id in by {
+                other_state.votes.push(Vote {
+                    term: *term,
+                    from: *id,
+                    to: *leader,
+                })
+            }
+
+            // find duplicate votes and blacklist the nodes
+            let mut seen = std::collections::HashSet::new();
+            for vote in &other_state.votes {
+                if vote.term == state.current_term() {
+                    if seen.contains(&vote.from) {
+                        // Duplicate vote found, blacklist the node
+                        other_state.blacklist.push(vote.from);
+                    } else {
+                        seen.insert(vote.from);
+                    }
+                }
+            }
         }
 
         ControlFlow::Continue(msg)
+    }
+
+    fn inject_on_event(
+        &self,
+        state: &mut Node<Id>,
+        _other_state: &mut DoubleVoteFixState,
+        out: &mut Out<RaftActor<DoubleVoteFixMessage, DoubleVoteFixState>>,
+        event: RaftEvent<Id>,
+    ) -> ControlFlow<(), RaftEvent<Id>> {
+        match event {
+            RaftEvent::LeaderElected { leader } => {
+                if leader == *state.get_id() {
+                    for other_id in state.nodes() {
+                        if other_id != state.get_id() {
+                            // Send the elected message to all nodes
+                            out.send(
+                                *other_id,
+                                StaterightMessage::Other(ElectedBy {
+                                    leader,
+                                    term: state.current_term(),
+                                    by: state.get_votes_received().iter().cloned().collect(),
+                                }),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        ControlFlow::Continue(event)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fault::actor::{create_raft_actor_model, RaftActor};
+    use crate::fault::actor::RaftActor;
     use crate::fault::double_vote::DoubleVoteFaultInjector;
+    use stateright::actor::ActorModel;
     use stateright::Checker;
+    use stateright::Expectation::Sometimes;
     use stateright::Model;
+    use std::ops::Deref;
 
     #[test]
     fn test_double_vote_fix() {
-        let peers: Vec<Id> = Id::vec_from(0..5);
+        let peers: Vec<Id> = Id::vec_from(0..3);
 
         let actors = vec![
             RaftActor::new(peers.clone(), DoubleVoteFaultInjector),
             RaftActor::new(peers.clone(), DoubleVoteFixInjector),
             RaftActor::new(peers.clone(), DoubleVoteFixInjector),
-            RaftActor::new(peers.clone(), DoubleVoteFixInjector),
-            RaftActor::new(peers.clone(), DoubleVoteFixInjector),
         ];
 
-        create_raft_actor_model()
+        ActorModel::new((), ())
             .actors(actors)
+            .property(Sometimes, "Double Vote Banned", |_actor, state| {
+                // check if someone banned node 1, which is the double vote fault injector
+                for states in &state.actor_states {
+                    let (_, _, state) = states.deref();
+                    if state.blacklist.contains(&Id::from(0)) {
+                        return true;
+                    }
+                }
+                false
+            })
             .checker()
-            .target_max_depth(11)
+            .target_max_depth(14)
             .threads(num_cpus::get())
+            // .serve("localhost:3000");
             .spawn_dfs()
             .join()
-            .assert_properties();
+            .assert_properties()
     }
 }
