@@ -36,6 +36,7 @@ where
             RaftEvent::LeaderElected { .. } => {
                 node_state.start_election(out).block_on().unwrap();
             }
+            _ => {}
         }
         ControlFlow::Continue(event)
     }

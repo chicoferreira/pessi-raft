@@ -1,10 +1,11 @@
+use crate::raft::RaftEvent::ElectionStarted;
 use crate::transport::{ClientRequest, ClientResponse, RaftTransport};
 use anyhow::Result;
 use log::debug;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::cmp::min;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -98,6 +99,7 @@ pub enum RaftError<Id> {
 
 pub enum RaftEvent<Id> {
     LeaderElected { leader: Id },
+    ElectionStarted,
 }
 
 const ELECTION_TIMEOUT_MIN: Duration = Duration::from_millis(1500);
@@ -125,7 +127,10 @@ impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
         node
     }
 
-    pub async fn start_election(&mut self, transport: &mut impl RaftTransport<Id>) -> Result<()> {
+    pub async fn start_election(
+        &mut self,
+        transport: &mut impl RaftTransport<Id>,
+    ) -> Result<RaftEvent<Id>> {
         debug!(
             "Starting election for term {} with me as a candidate",
             self.current_term
@@ -155,7 +160,7 @@ impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
         }
 
         self.start_election_timer();
-        Ok(())
+        Ok(ElectionStarted)
     }
 
     pub fn start_election_timer(&mut self) {
@@ -605,16 +610,6 @@ impl<Id: Clone + Default + Eq + Hash + Ord> Hash for Node<Id> {
         hash_hashmap(&self.sent_length, state);
         hash_hashmap(&self.acked_length, state);
     }
-}
-
-fn hash_hashset<H, T>(set: &HashSet<T>, state: &mut H)
-where
-    H: Hasher,
-    T: Clone + Hash + Ord,
-{
-    let mut cloned: Vec<T> = set.iter().cloned().collect();
-    cloned.sort();
-    cloned.hash(state);
 }
 
 pub fn hash_hashmap<H, K, V>(map: &HashMap<K, V>, state: &mut H)

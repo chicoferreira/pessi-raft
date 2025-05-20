@@ -5,3 +5,4 @@ mod election_spam;
 mod election_spam_fix;
 mod injector;
 mod property;
+mod message_forgery;

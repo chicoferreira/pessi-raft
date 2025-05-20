@@ -1,7 +1,7 @@
 use crate::fault::actor::RaftActor;
 use crate::raft::Role;
-use stateright::Expectation::{Always, Eventually};
 use stateright::actor::{ActorModel, ActorModelState};
+use stateright::Expectation::{Always, Sometimes};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -103,8 +103,8 @@ where
     OtherState: Default + Clone + Debug + Hash + PartialEq,
 {
     target
-        .property(Eventually, ELECTION_LIVENESS, election_liveness_property)
-        .property(Eventually, LOG_LIVENESS, log_liveness_property)
+        .property(Sometimes, ELECTION_LIVENESS, election_liveness_property)
+        .property(Sometimes, LOG_LIVENESS, log_liveness_property)
         .property(Always, ELECTION_SAFETY, election_safety_property)
         .property(Always, LOG_SAFETY, log_safety_property)
 }

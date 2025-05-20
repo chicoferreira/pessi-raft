@@ -127,10 +127,11 @@ impl<OtherMsg: Clone + Debug + Eq + Hash, OtherState: Clone + Debug + Hash + Par
                             ControlFlow::Break(()) => return,
                         };
 
-                    let LeaderElected { leader } = event;
-                    let pending_requests = mem::take(pending_requests);
-                    for pending_request in pending_requests {
-                        out.send(leader, pending_request);
+                    if let LeaderElected { leader } = event {
+                        let pending_requests = mem::take(pending_requests);
+                        for pending_request in pending_requests {
+                            out.send(leader, pending_request);
+                        }
                     }
                 }
             }
