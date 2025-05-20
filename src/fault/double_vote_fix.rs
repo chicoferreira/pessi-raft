@@ -115,10 +115,10 @@ mod tests {
     use super::*;
     use crate::fault::actor::RaftActor;
     use crate::fault::double_vote::DoubleVoteFaultInjector;
-    use stateright::actor::ActorModel;
     use stateright::Checker;
     use stateright::Expectation::Sometimes;
     use stateright::Model;
+    use stateright::actor::ActorModel;
     use std::ops::Deref;
 
     #[test]

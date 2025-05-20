@@ -5,7 +5,7 @@ use crate::raft::RaftEvent::LeaderElected;
 use crate::raft::{RaftError, RaftMessage, Role};
 use crate::transport::{ClientRequest, ClientResponse, RaftTransport};
 use pollster::FutureExt;
-use stateright::actor::{model_timeout, Actor, ActorModel, Id, Out};
+use stateright::actor::{model_timeout, Actor, ActorModel, Envelope, Id, Network, Out};
 use std::borrow::Cow;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -190,31 +190,30 @@ where
     OtherMsg: Clone + Debug + Eq + Hash,
     OtherState: Clone + Debug + Hash + PartialEq + Default,
 {
-    property::add_raft_properties(ActorModel::new((), ()))
+    let network = Network::new_ordered(vec![Envelope {
+        src: Id::from(0),
+        dst: Id::from(1),
+        msg: StaterightMessage::<OtherMsg>::ClientRequest(ClientRequest::Write {
+            key: 1,
+            value: 42,
+            msg_id: 1,
+        }),
+    }]);
+
+    property::add_raft_properties(ActorModel::new((), ())).init_network(network)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::fault::actor::{create_raft_actor_model, RaftActor, StaterightMessage};
+    use crate::fault::actor::{create_raft_actor_model, RaftActor};
     use crate::fault::injector::NoFaultInjector;
-    use crate::transport::ClientRequest;
-    use stateright::actor::{Envelope, Id, Network};
+    use stateright::actor::Id;
     use stateright::Checker;
     use stateright::Model;
     use std::sync::Arc;
 
     #[test]
     fn test_linearizability() {
-        let network = Network::new_ordered(vec![Envelope {
-            src: Id::from(0),
-            dst: Id::from(1),
-            msg: StaterightMessage::<()>::ClientRequest(ClientRequest::Write {
-                key: 1,
-                value: 42,
-                msg_id: 1,
-            }),
-        }]);
-
         let server_count = 3;
         let peers: Vec<Id> = Id::vec_from(0..server_count);
 
@@ -225,7 +224,6 @@ mod tests {
                 node_ids: peers.clone(),
                 _pd: Default::default(),
             }))
-            .init_network(network)
             .checker()
             .target_max_depth(15)
             .threads(num_cpus::get())

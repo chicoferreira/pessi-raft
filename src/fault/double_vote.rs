@@ -40,7 +40,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fault::actor::{create_raft_actor_model, RaftActor};
+    use crate::fault::actor::{RaftActor, create_raft_actor_model};
     use crate::fault::injector::NoFaultInjector;
     use crate::fault::property;
     use stateright::Checker;

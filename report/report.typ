@@ -103,6 +103,8 @@ maelstrom.jar test -w lin-kv --bin .\target\release\pessi-raft.exe --time-limit 
   Como não há um líder estável, a propriedade de _liveness_ não é respeitada, isto é, o sistema não consegue fazer progresso, visto que não há tempo suficiente para replicar as entradas no log.
 ][
   #text(fill: red)[A FAZER]
+
+  Falar que o stateright encontrou uma possibilidade de ainda haver lider na implementação do spam.
 ][
   Para este problema, não há uma solução concreta, e teremos que recorrer a soluções heurísticas.
 

@@ -1,7 +1,7 @@
 use crate::raft;
 use crate::raft::{Node, RaftError};
 use crate::transport::{ClientRequest, ClientResponse, RaftTransport};
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use log::debug;
 use serde::{Deserialize, Serialize};
 use std::mem;

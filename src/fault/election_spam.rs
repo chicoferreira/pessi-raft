@@ -1,26 +1,43 @@
-use crate::fault::actor::RaftActor;
+use super::injector::FaultInjector;
+use crate::fault::actor::{RaftActor, StaterightMessage};
 use crate::raft::{Node, RaftEvent};
 use pollster::FutureExt;
 use stateright::actor::{Id, Out};
+use std::fmt::Debug;
+use std::hash::Hash;
+use std::ops::ControlFlow;
 
-use super::injector::FaultInjector;
+pub struct ElectionSpamFault;
 
-struct ElectionSpamFault;
+impl<OtherMsg, OtherState> FaultInjector<OtherMsg, OtherState> for ElectionSpamFault
+where
+    OtherMsg: Clone + Debug + Eq + Hash,
+    OtherState: Default + Clone + Debug + Hash + PartialEq,
+{
+    fn inject_on_msg(
+        &self,
+        node_state: &mut Node<Id>,
+        _other_state: &mut OtherState,
+        msg: StaterightMessage<OtherMsg>,
+        out: &mut Out<RaftActor<OtherMsg, OtherState>>,
+    ) -> ControlFlow<(), StaterightMessage<OtherMsg>> {
+        node_state.start_election(out).block_on().unwrap();
+        ControlFlow::Continue(msg)
+    }
 
-impl FaultInjector<(), ()> for ElectionSpamFault {
     fn inject_on_event(
         &self,
         node_state: &mut Node<Id>,
-        _other_state: &mut (),
-        out: &mut Out<RaftActor<(), ()>>,
+        _other_state: &mut OtherState,
+        out: &mut Out<RaftActor<OtherMsg, OtherState>>,
         event: RaftEvent<Id>,
-    ) -> std::ops::ControlFlow<(), RaftEvent<Id>> {
+    ) -> ControlFlow<(), RaftEvent<Id>> {
         match event {
             RaftEvent::LeaderElected { .. } => {
                 node_state.start_election(out).block_on().unwrap();
             }
         }
-        std::ops::ControlFlow::Continue(event)
+        ControlFlow::Continue(event)
     }
 }
 
@@ -37,8 +54,8 @@ mod tests {
         let peers: Vec<Id> = Id::vec_from(0..3);
 
         let actors = vec![
-            RaftActor::<(), ()>::new(peers.clone(), NoFaultInjector),
-            RaftActor::new(peers.clone(), NoFaultInjector),
+            RaftActor::<(), ()>::new(peers.clone(), ElectionSpamFault),
+            RaftActor::new(peers.clone(), ElectionSpamFault),
             RaftActor::new(peers.clone(), NoFaultInjector),
         ];
 
@@ -47,6 +64,7 @@ mod tests {
             .checker()
             .target_max_depth(12)
             .threads(num_cpus::get())
+            // .serve("localhost:3000");
             .spawn_dfs()
             .join()
             .assert_no_discovery(property::LOG_LIVENESS)

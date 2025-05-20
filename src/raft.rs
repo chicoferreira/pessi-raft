@@ -617,7 +617,7 @@ where
     cloned.hash(state);
 }
 
-fn hash_hashmap<H, K, V>(map: &HashMap<K, V>, state: &mut H)
+pub fn hash_hashmap<H, K, V>(map: &HashMap<K, V>, state: &mut H)
 where
     H: Hasher,
     K: Clone + Hash + Ord,
