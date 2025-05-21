@@ -1,7 +1,7 @@
 use crate::fault::actor::RaftActor;
 use crate::raft::Role;
-use stateright::actor::{ActorModel, ActorModelState};
 use stateright::Expectation::{Always, Sometimes};
+use stateright::actor::{ActorModel, ActorModelState};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;

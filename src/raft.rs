@@ -39,7 +39,7 @@ pub enum Role {
     Leader,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Hash)]
 pub struct LogEntry<Id> {
     pub term: TermId,
     /// The node that created this entry
@@ -102,8 +102,8 @@ pub enum RaftEvent<Id> {
     ElectionStarted,
 }
 
-const ELECTION_TIMEOUT_MIN: Duration = Duration::from_millis(1500);
-const ELECTION_TIMEOUT_MAX: Duration = Duration::from_millis(2000);
+const ELECTION_TIMEOUT_MIN: Duration = Duration::from_millis(200);
+const ELECTION_TIMEOUT_MAX: Duration = Duration::from_millis(1000);
 
 impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
     pub fn new(id: Id, nodes: Vec<Id>) -> Self {
@@ -574,6 +574,10 @@ impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
 
     pub fn commit_length(&self) -> usize {
         self.commit_length
+    }
+
+    pub fn commit_length_mut_ref(&mut self) -> &mut usize {
+        &mut self.commit_length
     }
 
     pub fn get_id(&self) -> &Id {

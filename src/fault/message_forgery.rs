@@ -37,12 +37,12 @@ impl FaultInjector<(), ()> for MessageForgeryFault {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fault::actor::{create_raft_actor_model, RaftActor};
+    use crate::fault::actor::{RaftActor, create_raft_actor_model};
     use crate::fault::injector::NoFaultInjector;
     use crate::fault::property;
+    use DiscoveryClassification::Counterexample;
     use stateright::Checker;
     use stateright::{DiscoveryClassification, Model};
-    use DiscoveryClassification::Counterexample;
 
     #[test]
     fn test_election_spam() {

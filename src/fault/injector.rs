@@ -21,6 +21,15 @@ where
         ControlFlow::Continue(msg)
     }
 
+    fn inject_on_post_msg(
+        &self,
+        node_state: &mut Node<Id>,
+        other_state: &mut OtherState,
+        out: &mut Out<RaftActor<OtherMsg, OtherState>>,
+    ) {
+        let _ = (node_state, other_state, out);
+    }
+
     fn inject_on_timeout(
         &self,
         node_state: &mut Node<Id>,

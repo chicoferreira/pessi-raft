@@ -5,7 +5,7 @@ use crate::raft::RaftEvent::LeaderElected;
 use crate::raft::{RaftError, RaftMessage, Role};
 use crate::transport::{ClientRequest, ClientResponse, RaftTransport};
 use pollster::FutureExt;
-use stateright::actor::{model_timeout, Actor, ActorModel, Envelope, Id, Network, Out};
+use stateright::actor::{Actor, ActorModel, Envelope, Id, Network, Out, model_timeout};
 use std::borrow::Cow;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -154,6 +154,8 @@ impl<OtherMsg: Clone + Debug + Eq + Hash, OtherState: Clone + Debug + Hash + Par
             }
             _ => {}
         }
+        self.fault_injector
+            .inject_on_post_msg(state, other_state, out);
     }
 
     fn on_timeout(
@@ -206,11 +208,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::fault::actor::{create_raft_actor_model, RaftActor};
+    use crate::fault::actor::{RaftActor, create_raft_actor_model};
     use crate::fault::injector::NoFaultInjector;
-    use stateright::actor::Id;
     use stateright::Checker;
     use stateright::Model;
+    use stateright::actor::Id;
     use std::sync::Arc;
 
     #[test]
