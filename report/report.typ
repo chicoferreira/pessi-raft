@@ -67,7 +67,7 @@ No entanto, não é certo que o algoritmo esteja totalmente correto, pois o Mael
 
 = Verificação de estados com o Stateright
 
-Para além dos testes de integração com o Maelstrom, recorreu-se ao Stateright para uma verificação mais formal do algoritmo Raft implementado. O Stateright é uma ferramenta de _model checking_ para sistemas distribuídos escritos em Rust, que permite explorar exaustivamente os possíveis estados de um sistema e verificar se certas propriedades, a partir de código.
+Para além dos testes de integração com o Maelstrom, recorreu-se ao Stateright para uma verificação mais formal do algoritmo Raft implementado. O Stateright é uma ferramenta de _model checking_ para sistemas distribuídos escritos em Rust, que permite explorar exaustivamente os possíveis estados de um sistema e verificar se certas propriedades se mantêm, a partir de código.
 
 
 == Funcionamento e Aplicação ao Raft
