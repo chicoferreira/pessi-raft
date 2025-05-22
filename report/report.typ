@@ -18,10 +18,10 @@
     ),
     grid(
       columns: 3,
-      column-gutter: 1fr,
-      name_and_number[Francisco Macedo Ferreira][PG55942],
-      name_and_number[Ivan Sérgio Rocha Ribeiro][PG55950],
-      name_and_number[Diogo Alexandre Correia Marques][PG?????],
+      column-gutter: 6em,
+      name_and_number[Diogo Marques][PG55931],
+      name_and_number[Francisco Ferreira][PG55942],
+      name_and_number[Ivan Ribeiro][PG55950],
     )
   ),
 )
@@ -72,8 +72,8 @@ Para além dos testes de integração com o Maelstrom, recorreu-se ao Stateright
 
 == Funcionamento e Aplicação ao Raft
 O _model checking_ com Stateright envolve a definição de:
-+ Um *modelo* do sistema: Este modelo descreve os estados possíveis de cada nodo Raft (e.g., `current_term`, `voted_for`, `log`, `commit_index`, `role`) e as ações que podem transitar o sistema de um estado para outro (e.g., enviar/receber uma mensagem `RequestVote`, `AppendEntries`, dar _timeout_ numa eleição).
-+ Um *ambiente*: Define como as ações dos nodos interagem, incluindo a rede (que pode perder, duplicar ou reordenar mensagens) e outros eventos não determinísticos (mensagens que podem ser enviadas em qualquer momento)
++ Um *modelo* do sistema: Este modelo descreve os estados possíveis de cada nodo Raft (e.g., `current_term`, `voted_for`, `log`, `commit_index`, `role`) e as ações que podem transitar o sistema de um estado para outro (e.g., enviar/receber uma mensagem `RequestVote`, `AppendEntries`, dar _timeout_ numa eleição);
++ Um *ambiente*: Define como as ações dos nodos interagem, incluindo a rede (que pode perder, duplicar ou reordenar mensagens) e outros eventos não determinísticos (mensagens que podem ser enviadas em qualquer momento);
 + *Propriedades*: São invariantes ou condições que devem ser sempre verdadeiras em todos os estados alcançáveis do sistema.
 
 Esta definição foi feita através de:
