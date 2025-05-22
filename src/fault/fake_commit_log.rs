@@ -34,6 +34,8 @@ mod tests {
     use super::*;
     use crate::fault::actor::{RaftActor, create_raft_actor_model};
     use crate::fault::injector::NoFaultInjector;
+    use crate::fault::property;
+    use stateright::Checker;
     use stateright::Model;
 
     #[test]
@@ -46,14 +48,19 @@ mod tests {
             RaftActor::new(peers.clone(), NoFaultInjector),
         ];
 
-        create_raft_actor_model()
+        let classification = create_raft_actor_model()
             .actors(actors)
             .checker()
-            // .target_max_depth(12)
+            .target_max_depth(12)
             .threads(num_cpus::get())
-            .serve("localhost:3000");
-        // .spawn_dfs()
-        // .join()
-        // .discovery
+            // .serve("localhost:3000");
+            .spawn_dfs()
+            .join()
+            .discovery_classification(property::LOG_SAFETY);
+
+        assert!(matches!(
+            classification,
+            stateright::DiscoveryClassification::Counterexample
+        ));
     }
 }

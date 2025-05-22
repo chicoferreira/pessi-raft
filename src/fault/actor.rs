@@ -210,10 +210,8 @@ where
 mod tests {
     use crate::fault::actor::{RaftActor, create_raft_actor_model};
     use crate::fault::injector::NoFaultInjector;
-    use stateright::Checker;
-    use stateright::Model;
     use stateright::actor::Id;
-    use std::sync::Arc;
+    use stateright::{Checker, Model};
 
     #[test]
     fn test_linearizability() {
@@ -222,11 +220,7 @@ mod tests {
 
         create_raft_actor_model::<(), ()>()
             // .max_crashes((self.server_count - 1) / 2)
-            .actors((0..server_count).map(|_| RaftActor {
-                fault_injector: Arc::new(NoFaultInjector),
-                node_ids: peers.clone(),
-                _pd: Default::default(),
-            }))
+            .actors((0..server_count).map(|_| RaftActor::new(peers.clone(), NoFaultInjector)))
             .checker()
             .target_max_depth(15)
             .threads(num_cpus::get())

@@ -1,4 +1,6 @@
 #set text(font: "IBM Plex Sans", lang: "pt", region: "pt")
+#show link: underline
+#show link: text.with(fill: blue)
 
 #let name_and_number(name, number) = grid(
   row-gutter: 0.5em,
@@ -29,9 +31,84 @@
 Neste trabalho prático, pretendemos identificar e analisar possíveis vulnerabilidades do algoritmo Raft perante
 a falhas assertivas que comprometam as propriedades de segurança do mesmo.
 
+= Implementação do Raft
+
+O algoritmo do Raft foi implementado em Rust.
+
+A estrutura principal do código está dividida em módulos que separam as responsabilidades:
+- `raft.rs`: Contém a lógica central do algoritmo Raft, incluindo a máquina de estados dos nodos (Seguidor, Candidato, Líder), a replicação de _logs_, e os processos de eleição.
+- `maelstrom.rs`: Providencia a abstração para interagir com o ambiente _Maelstrom_, tratando da serialização/desserialização de mensagens e da comunicação entre nodos (ler do _stdin_ e escrever para o _stdout_).
+- `transport.rs`: Define uma interface de transporte para o Raft (`RaftTransport`) e uma implementação específica para Maelstrom (`MaelstromTransport`), desacoplando a lógica do Raft do mecanismo de transporte subjacente.
+- `main.rs`: Inicializa o nodo Maelstrom, integrando o sistema com os testes `lin-kv` do Maelstrom.
+
+Para testar a sua implementação via _Maelstrom_ foi utilizado o seguinte comando:
+
+```bash
+java -jar maelstrom.jar test
+    -w lin-kv
+    --bin ".\target\release\pessi-raft.exe"
+    --time-limit 60
+    --node-count 3
+    --concurrency 10n
+    --rate 100
+    --nemesis partition
+    --nemesis-interval 3
 ```
-maelstrom.jar test -w lin-kv --bin .\target\release\pessi-raft.exe --time-limit 60 --node-count 3 --concurrency 10n --rate 100 --nemesis partition --nemesis-interval 3
+
+Como resultado, conseguimos observar que o _Maelstrom_ não detectou falhas no nosso algoritmo.
+
 ```
+> Everything looks good!
+```
+
+No entanto, não é certo que o algoritmo esteja totalmente correto, pois o Maelstrom apenas testa um subconjunto limitado de cenários e não garante a cobertura de todos os possíveis estados ou falhas do sistema.
+
+#show "Stateright": link("https://github.com/stateright/stateright")[_Stateright_]
+
+= Verificação de estados com o Stateright
+
+Para além dos testes de integração com o Maelstrom, recorreu-se ao Stateright para uma verificação mais formal do algoritmo Raft implementado. O Stateright é uma ferramenta de _model checking_ para sistemas distribuídos escritos em Rust, que permite explorar exaustivamente os possíveis estados de um sistema e verificar se certas propriedades, a partir de código.
+
+
+== Funcionamento e Aplicação ao Raft
+O _model checking_ com Stateright envolve a definição de:
++ Um *modelo* do sistema: Este modelo descreve os estados possíveis de cada nodo Raft (e.g., `current_term`, `voted_for`, `log`, `commit_index`, `role`) e as ações que podem transitar o sistema de um estado para outro (e.g., enviar/receber uma mensagem `RequestVote`, `AppendEntries`, dar _timeout_ numa eleição).
++ Um *ambiente*: Define como as ações dos nodos interagem, incluindo a rede (que pode perder, duplicar ou reordenar mensagens) e outros eventos não determinísticos (mensagens que podem ser enviadas em qualquer momento)
++ *Propriedades*: São invariantes ou condições que devem ser sempre verdadeiras em todos os estados alcançáveis do sistema.
+
+Esta definição foi feita através de:
+- implementação do Raft, como modelo;
+- ambiente com uma rede que não perde, duplica ou reordena mensagens;
+- uma única mensagem, que consiste em escrever o valor `42` na chave `1`; #footnote[Esta mensagem foi escolhida de forma arbitrária e única para simplificar e acelerar a exploração dos possíveis estados do sistema, sendo suficiente para verificar todas as propriedades.]
+- uma lista de propriedades que iremos apresentar a seguir.
+
+== Propriedades Verificadas
+Foram definidas e verificadas várias propriedades fundamentais do Raft para garantir a sua correção:
+
++ *Segurança da Eleição (Election Safety)*: No máximo um líder pode ser eleito num determinado termo.
+  - Expectativa temporal: `Always`
+
++ *Coerência do Log (Log Safety)*: Se dois _logs_ contêm uma entrada _committed_ com o mesmo índice e termo, então os _logs_ são idênticos até esse índice.
+  - Expectativa temporal: `Always`
+
++ *Vivacidade do Log (Log Liveness)*: O _log_ deverá progredir, isto é, haver um líder que aplique entradas no _log_. O _log_ não deverá ficar vazio.
+  - Expectativa temporal: `Sometimes`
+
++ *Vivacidade de Eleições (Election Liveness)*: O sistema deverá progredir de modo a que um líder seja eleito. Um líder deverá ser eleito.
+  - Expectativa temporal: `Sometimes`
+
+Estas propriedades, que se encontram em `src/fault/property.rs`, foram verificadas com o Stateright para o algoritmo Raft implementado, com sucesso.
+
+#pagebreak()
+
+= Faltas
+
+Para analisar o comportamento do Raft perante falhas bizantinas e comportamentos maliciosos, criámos uma "API de Faltas" que permite injetar código em pontos críticos da execução. Pontos críticos são por exemplo, numa receção de mensagem, numa transição de estado importante (exemplo: líder eleito), etc. Desta forma, conseguimos simular anomalias sem alterar o código do algoritmo Raft diretamente.
+
+O impacto de cada falha foi avaliado com testes unitários (usando `cargo test`) com a integração com o Stateright, permitindo verificar se as propriedades eram violadas sob essas condições, e se a mitigação de cada falha era eficaz.
+
+Nas secções seguintes, detalhamos as faltas específicas investigadas, o seu impacto potencial no sistema, a demonstração da sua ocorrência, as possíveis medidas de mitigação e a demonstração dessas medidas.
+
 
 #let fault_counter = counter("fault")
 
@@ -40,6 +117,8 @@ maelstrom.jar test -w lin-kv --bin .\target\release\pessi-raft.exe --time-limit 
   text(size: 1.1em, weight: "semibold", title),
   text(content),
 )
+
+#let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 #let fault_chapter(
   title,
@@ -51,7 +130,7 @@ maelstrom.jar test -w lin-kv --bin .\target\release\pessi-raft.exe --time-limit 
   title_label: "",
 ) = grid(
   row-gutter: 1.1em,
-  [#heading(numbering: "A.", supplement: [Falta], title) #label(title_label)],
+  [#heading(numbering: (_, i) => [Falta #alphabet.at(i - 1)], level: 2, [-] + title) #label(title_label)],
   fault_subchapter_text_content([Identificação da Falta], identification),
   fault_subchapter_text_content([Impacto], impact),
   fault_subchapter_text_content([Demonstração do Impacto], demonstration),

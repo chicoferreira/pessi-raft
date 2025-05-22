@@ -36,24 +36,23 @@ where
     // if a server has applied a log entry at a given index to its state machine, no other server will
     // ever apply a different log entry for the same index.
 
-    let mut max_commit_length = 0;
-    let mut max_commit_length_actor_id = 0;
-    for (i, s) in state.actor_states.iter().enumerate() {
-        if s.0.log().len() > max_commit_length {
-            max_commit_length = s.0.log().len();
-            max_commit_length_actor_id = i;
-        }
-    }
+    let max = state
+        .actor_states
+        .iter()
+        .enumerate()
+        .map(|(id, node)| (id, node.0.commit_length()))
+        .max_by_key(|(_, commit_length)| *commit_length);
+
+    let Some((max_actor_id, max_commit_length)) = max else {
+        return true;
+    };
+
     if max_commit_length == 0 {
         return true;
     }
 
     for i in 0..max_commit_length {
-        let ref_log = state.actor_states[max_commit_length_actor_id]
-            .0
-            .log()
-            .get(i)
-            .unwrap();
+        let ref_log = &state.actor_states[max_actor_id].0.log()[i];
         for s in &state.actor_states {
             if let Some(log) = s.0.log().get(i) {
                 if log != ref_log {
