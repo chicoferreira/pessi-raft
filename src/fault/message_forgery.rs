@@ -40,12 +40,12 @@ mod tests {
     use crate::fault::actor::{RaftActor, create_raft_actor_model};
     use crate::fault::injector::NoFaultInjector;
     use crate::fault::property;
-    use DiscoveryClassification::Counterexample;
     use stateright::Checker;
-    use stateright::{DiscoveryClassification, Model};
+    use stateright::DiscoveryClassification::Counterexample;
+    use stateright::Model;
 
     #[test]
-    fn test_election_spam() {
+    fn test_message_forgery() {
         let peers: Vec<Id> = Id::vec_from(0..3);
 
         let actors = vec![
@@ -63,8 +63,6 @@ mod tests {
             .spawn_dfs()
             .join()
             .discovery_classification(property::ELECTION_SAFETY);
-
-        // TODO: check why assert_properties is working
 
         assert!(matches!(classification, Counterexample));
     }

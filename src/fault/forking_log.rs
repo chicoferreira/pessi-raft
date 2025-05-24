@@ -51,8 +51,8 @@ mod tests {
     fn test_forking_log_fault() {
         let peers: Vec<Id> = Id::vec_from(0..3);
         let actors = vec![
-            RaftActor::<(), ()>::new(peers.clone(), NoFaultInjector),
             RaftActor::new(peers.clone(), ForkingLogFaultInjector),
+            RaftActor::<(), ()>::new(peers.clone(), NoFaultInjector),
             RaftActor::new(peers.clone(), NoFaultInjector),
         ];
 

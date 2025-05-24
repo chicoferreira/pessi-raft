@@ -3,6 +3,7 @@ use crate::fault::double_vote_fix::DoubleVoteFixMessage::ElectedBy;
 use crate::fault::injector::FaultInjector;
 use crate::raft::{Node, RaftEvent, RaftMessage, TermId};
 use stateright::actor::{Id, Out};
+use std::collections::HashMap;
 use std::ops::ControlFlow;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -64,14 +65,16 @@ impl FaultInjector<DoubleVoteFixMessage, DoubleVoteFixState> for DoubleVoteFixIn
             }
 
             // find duplicate votes and blacklist the nodes
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = HashMap::new();
             for vote in &other_state.votes {
                 if vote.term == state.current_term() {
-                    if seen.contains(&vote.from) {
-                        // Duplicate vote found, blacklist the node
-                        other_state.blacklist.push(vote.from);
+                    if let Some(other_vote) = seen.get(&vote.from) {
+                        if other_vote != &vote.to {
+                            // Duplicate vote found, blacklist the node
+                            other_state.blacklist.push(vote.from);
+                        }
                     } else {
-                        seen.insert(vote.from);
+                        seen.insert(vote.from, vote.to);
                     }
                 }
             }
@@ -91,17 +94,17 @@ impl FaultInjector<DoubleVoteFixMessage, DoubleVoteFixState> for DoubleVoteFixIn
             RaftEvent::LeaderElected { leader } => {
                 if leader == *state.get_id() {
                     for other_id in state.nodes() {
-                        if other_id != state.get_id() {
-                            // Send the elected message to all nodes
-                            out.send(
-                                *other_id,
-                                StaterightMessage::Other(ElectedBy {
-                                    leader,
-                                    term: state.current_term(),
-                                    by: state.get_votes_received().iter().cloned().collect(),
-                                }),
-                            );
-                        }
+                        // if other_id != state.get_id() {
+                        // Send the elected message to all nodes
+                        out.send(
+                            *other_id,
+                            StaterightMessage::Other(ElectedBy {
+                                leader,
+                                term: state.current_term(),
+                                by: state.get_votes_received().iter().cloned().collect(),
+                            }),
+                        );
+                        // }
                     }
                 }
             }
@@ -119,7 +122,7 @@ mod tests {
     use stateright::Checker;
     use stateright::Expectation::Sometimes;
     use stateright::Model;
-    use stateright::actor::ActorModel;
+    use stateright::actor::{ActorModel, Network};
     use std::ops::Deref;
 
     #[test]
@@ -134,6 +137,7 @@ mod tests {
 
         ActorModel::new((), ())
             .actors(actors)
+            .init_network(Network::new_ordered(vec![]))
             .property(Sometimes, "Double Vote Banned", |_actor, state| {
                 // check if someone banned node 1, which is the double vote fault injector
                 for states in &state.actor_states {

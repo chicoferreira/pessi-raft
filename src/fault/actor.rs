@@ -163,9 +163,9 @@ impl<OtherMsg: Clone + Debug + Eq + Hash, OtherState: Clone + Debug + Hash + Par
         _id: Id,
         state: &mut Cow<Self::State>,
         timer: &Self::Timer,
-        o: &mut Out<Self>,
+        out: &mut Out<Self>,
     ) {
-        let (state, _pending_requests, other_state) = state.to_mut();
+        let (state, pending_requests, other_state) = state.to_mut();
 
         if self
             .fault_injector
@@ -177,11 +177,24 @@ impl<OtherMsg: Clone + Debug + Eq + Hash, OtherState: Clone + Debug + Hash + Par
 
         match timer {
             RaftTicker::ReplicationTimeout => {
-                state.broadcast_replicate_log(o).block_on().unwrap();
+                state.broadcast_replicate_log(out).block_on().unwrap();
             }
             RaftTicker::ElectionTimeout => {
                 if state.current_role() != Role::Leader {
-                    state.start_election(o).block_on().unwrap();
+                    let event = state.start_election(out).block_on().unwrap();
+                    let event = self
+                        .fault_injector
+                        .inject_on_event(state, other_state, out, event);
+                    let ControlFlow::Continue(event) = event else {
+                        return;
+                    };
+
+                    if let LeaderElected { leader } = event {
+                        let pending_requests = mem::take(pending_requests);
+                        for pending_request in pending_requests {
+                            out.send(leader, pending_request);
+                        }
+                    }
                 }
             }
         }

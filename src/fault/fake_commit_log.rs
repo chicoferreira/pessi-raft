@@ -39,7 +39,7 @@ mod tests {
     use stateright::Model;
 
     #[test]
-    fn test_election_spam() {
+    fn test_fake_log_commit() {
         let peers: Vec<Id> = Id::vec_from(0..3);
 
         let actors = vec![

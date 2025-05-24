@@ -24,7 +24,7 @@ where
             // if the message is a vote request, always accept
             let vote_response_message = RaftMessage::VoteResponse(VoteResponseMessage {
                 node_id: node_state.get_id().clone(),
-                current_term: node_state.current_term(),
+                current_term: vote_request_message.current_term,
                 vote_granted: true,
             });
             out.send(
@@ -52,9 +52,9 @@ mod tests {
         let peers: Vec<Id> = Id::vec_from(0..3);
 
         let actors = vec![
-            RaftActor::<(), ()>::new(peers.clone(), NoFaultInjector),
+            RaftActor::<(), ()>::new(peers.clone(), DoubleVoteFaultInjector),
             RaftActor::new(peers.clone(), NoFaultInjector),
-            RaftActor::new(peers.clone(), DoubleVoteFaultInjector),
+            RaftActor::new(peers.clone(), NoFaultInjector),
         ];
 
         let discovery = create_raft_actor_model()
