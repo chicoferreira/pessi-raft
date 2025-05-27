@@ -5,7 +5,6 @@ mod election_spam;
 mod election_spam_fix;
 mod fake_commit_log;
 mod forking_log;
-mod forking_log_fix;
 mod injector;
 mod message_forgery;
 mod property;

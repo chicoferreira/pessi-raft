@@ -99,9 +99,9 @@ mod tests {
             .checker()
             .target_max_depth(16)
             .threads(num_cpus::get())
-            .serve("localhost:3000");
-        // .spawn_bfs()
-        // .join()
-        // .assert_properties()
+            // .serve("localhost:3000");
+            .spawn_bfs()
+            .join()
+            .assert_properties()
     }
 }
