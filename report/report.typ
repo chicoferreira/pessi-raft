@@ -1,4 +1,5 @@
 #set text(font: "IBM Plex Sans", lang: "pt", region: "pt")
+#set par(justify: true)
 
 #set page(numbering: "1/1")
 
@@ -10,6 +11,15 @@
 #let name_and_number(name, number) = grid(
   row-gutter: 0.5em,
   text(weight: "medium", name), text(size: 1em, number),
+)
+
+#let code_block(content) = block(
+  width: 100%,
+  inset: 5pt,
+  radius: 6pt,
+  fill: luma(240),
+  stroke: luma(200),
+  content
 )
 
 #align(
@@ -37,63 +47,74 @@
 
 = Introdução
 
-Neste trabalho prático, pretendemos identificar e analisar possíveis vulnerabilidades do algoritmo Raft perante
-a falhas assertivas que comprometam as propriedades de segurança do mesmo.
+Neste trabalho prático, pretendemos identificar e analisar possíveis vulnerabilidades do algoritmo de _Raft_ perante falhas assertivas que comprometam as propriedades de segurança do mesmo.
 
-Inicialmente, descrevemos a nossa implementação do Raft e a sua integração com o ambiente _Maelstrom_, e o uso do Stateright para verificar a correção do algoritmo original, de possíveis falhas e da sua mitigação.
+Inicialmente, descrevemos a nossa implementação do _Raft_ e a sua integração com o ambiente _Maelstrom_, de seguida o uso do Stateright para verificar a correção do algoritmo face a possíveis falhas e respetivas mitigações.
 
 = Implementação do Raft
 
-O algoritmo do Raft foi implementado em na linguagem de programação Rust. Quando o programa é executado, é inicializado um nó _Maelstrom_ que espera por mensagens do _stdin_ e escreve mensagens para o _stdout_.
+O algoritmo de Raft foi implementado na linguagem de programação _Rust_. Quando o programa é executado, é inicializado um nó _Maelstrom_ que aguarda mensagens do _stdin_ e escreve mensagens para o _stdout_.
 
 A estrutura principal do código está dividida em módulos que separam as responsabilidades:
-- `raft.rs`: Contém a lógica central do algoritmo Raft, incluindo a máquina de estados dos nós (Seguidor, Candidato, Líder), a replicação de _logs_, e os processos de eleição.
-- `maelstrom.rs`: Providencia a abstração para interagir com o ambiente _Maelstrom_, tratando da serialização/desserialização de mensagens e da comunicação entre nós (ler do _stdin_ e escrever para o _stdout_).
-- `transport.rs`: Define uma interface de transporte para o Raft (`RaftTransport`) e uma implementação específica para Maelstrom (`MaelstromTransport`), desacoplando a lógica do Raft do mecanismo de transporte subjacente.
-- `main.rs`: Inicializa o nó Maelstrom, integrando o sistema com os testes `lin-kv` do Maelstrom.
 
-Para testar a sua implementação via _Maelstrom_ foi utilizado o seguinte comando:
+- *`raft.rs`*: Contém a lógica central do algoritmo de _Raft_, incluindo a máquina de estados dos nós (Seguidor, Candidato, Líder), a replicação de _logs_ e os processos de eleição.
 
-```bash
-cargo build --release
-java -jar maelstrom.jar test
-    -w lin-kv
-    --bin ".\target\release\pessi-raft.exe"
-    --time-limit 60
-    --node-count 3
-    --concurrency 10n
-    --rate 100
-    --nemesis partition
-    --nemesis-interval 3
-```
+- *`maelstrom.rs`*: Providencia a abstração para interagir com o ambiente _Maelstrom_, tratando da serialização/desserialização de mensagens e da comunicação entre nós (ler do _stdin_ e escrever para o _stdout_).
 
-Como resultado, conseguimos observar que o _Maelstrom_ não detectou falhas no nosso algoritmo.
+- *`transport.rs`*: Define uma interface de transporte para o _Raft_ (`RaftTransport`) e uma implementação específica para _Maelstrom_ (`MaelstromTransport`), desacoplando a lógica do mecanismo de transporte subjacente.
 
+- *`main.rs`*: Inicializa o nó _Maelstrom_, integrando o sistema com os testes `lin-kv` do _Maelstrom_.
+
+Para testar a implementação via _Maelstrom_ foi utilizado o seguinte comando:
+
+#code_block(
+  ```bash
+  cargo build --release
+  java -jar maelstrom.jar test
+      -w lin-kv
+      --bin ".\target\release\pessi-raft.exe"
+      --time-limit 60
+      --node-count 3
+      --concurrency 10n
+      --rate 100
+      --nemesis partition
+      --nemesis-interval 3
+  ```
+)
+
+Como resultado, observamos que o _Maelstrom_ não detetou falhas no nosso algoritmo.
+
+#code_block(
 ```
 > Everything looks good!
 ```
+)
 
-No entanto, não é certo que o algoritmo esteja totalmente correto, pois o Maelstrom apenas testa um subconjunto limitado de cenários e não garante a cobertura de todos os possíveis estados ou falhas do sistema.
+No entanto, não é certo que o algoritmo esteja totalmente correto, pois o _Maelstrom_ apenas testa um subconjunto limitado de cenários e não garante a cobertura de todos os estados possíveis ou falhas do sistema.
 
-= Verificação de estados com o Stateright
+= Verificação de Estados com o Stateright
 
-Para além dos testes de integração com o Maelstrom, recorreu-se ao Stateright para uma verificação mais formal do algoritmo Raft implementado. O Stateright é uma ferramenta de _model checking_ para sistemas distribuídos escritos em Rust, que permite explorar exaustivamente os possíveis estados de um sistema e verificar se certas propriedades se mantêm, a partir de código.
+Para além dos testes de integração com o _Maelstrom_, recorreu-se ao Stateright para uma verificação mais formal do algoritmo de _Raft_ implementado. O Stateright é uma ferramenta de _model checking_ para sistemas distribuídos escritos em _Rust_, que permite explorar exaustivamente os possíveis estados de um sistema e verificar se certas propriedades se mantêm, tudo a partir de código.
 
 == Funcionamento e Aplicação ao Raft
 O _model checking_ com Stateright envolve a definição de:
-+ Um *modelo* do sistema: Este modelo descreve os estados possíveis de cada nó Raft (e.g., `current_term`, `voted_for`, `log`, `commit_index`, `role`) e as ações que podem transitar o sistema de um estado para outro (e.g., enviar/receber uma mensagem `RequestVote`, `AppendEntries`, dar _timeout_ numa eleição);
-+ Um *ambiente*: Define como as ações dos nós interagem, incluindo a rede (que pode perder, duplicar ou reordenar mensagens) e outros eventos não determinísticos (mensagens que podem ser enviadas em qualquer momento);
+
++ *Um modelo do sistema*: Este modelo descreve os estados possíveis de cada nó (e.g., `current_term`, `voted_for`, `log`, `commit_index`, `role`) e as ações que podem transitar o sistema de um estado para outro (e.g., enviar/receber uma mensagem `RequestVote`, `AppendEntries`, dar _timeout_ numa eleição);
+
++ *Um ambiente*: Define como as ações dos nós interagem, incluindo a rede (que pode perder, duplicar ou reordenar mensagens) e outros eventos não determinísticos (mensagens que podem ser enviadas em qualquer momento);
+
 + *Propriedades*: São invariantes ou condições que devem ser sempre verdadeiras em todos os estados alcançáveis do sistema.
 
-Esta definição foi feita através de:
-- implementação do Raft, como modelo;
-- ambiente com uma rede que não perde, duplica ou reordena mensagens;
-- uma única mensagem, que consiste em escrever o valor `42` na chave `1`; #footnote[Esta mensagem foi escolhida de forma arbitrária e única para simplificar e acelerar a exploração dos possíveis estados do sistema, sendo suficiente para verificar todas as propriedades.]
-- uma lista de propriedades que iremos apresentar a seguir;
-- resto dependente do teste a fazer.
+Esta definição foi realizada através de:
+
+- Implementação do _Raft_, como modelo;
+- Ambiente com uma rede que não perde, duplica ou reordena mensagens;
+- Uma única mensagem, que consiste em escrever o valor `42` na chave `1`; #footnote[Esta mensagem foi escolhida de forma arbitrária e única para simplificar e acelerar a exploração dos possíveis estados do sistema, sendo suficiente para verificar todas as propriedades.]
+- Uma lista de propriedades que iremos apresentar a seguir;
+- Resto dependente do teste a fazer.
 
 == Propriedades Verificadas
-Foram definidas e verificadas várias propriedades fundamentais do Raft para garantir a sua correção:
+Foram definidas e verificadas propriedades essenciais do Raft para garantir a sua correção:
 
 + *Segurança da Eleição (Election Safety)*<election_safety>: No máximo um líder pode ser eleito num determinado termo.
   - Expectativa temporal #footnote[`Always` significa que a propriedade deve ser respeitada em todos os estados alcançáveis do sistema, enquanto que `Sometimes` significa que a propriedade deve ser respeitada em alguns estados alcançáveis do sistema.]: `Always`
@@ -101,25 +122,25 @@ Foram definidas e verificadas várias propriedades fundamentais do Raft para gar
 + *Coerência do Log (Log Safety)*<log_safety>: Se dois _logs_ contêm uma entrada _committed_ com o mesmo índice e termo, então os _logs_ são idênticos até esse índice.
   - Expectativa temporal: `Always`
 
-+ *Vivacidade do Log (Log Liveness)*<log_liveness>: O _log_ deverá progredir, isto é, haver um líder que aplique entradas no _log_. O _log_ não deverá ficar vazio eventualmente.
++ *Vivacidade do Log (Log Liveness)*<log_liveness>: O _log_ deverá progredir, isto é, haver um líder que aplique entradas no _log_. O _log_ não deverá ficar vazio eternamente.
   - Expectativa temporal: `Sometimes`
 
-+ *Vivacidade de Eleições (Election Liveness)*<election_liveness>: O sistema deverá progredir de modo a que um líder seja eleito. Um líder deverá ser eleito eventualmente.
++ *Vivacidade de Eleições (Election Liveness)*<election_liveness>: O sistema deverá progredir de modo a que um líder seja eleito. Um líder deverá ser eleito inevitavelmente.
   - Expectativa temporal: `Sometimes`
 
-Estas propriedades, que se encontram em `src/fault/property.rs`, foram verificadas com o Stateright para o algoritmo Raft implementado, com sucesso.
+Estas propriedades, que se encontram em `src/fault/property.rs`, foram afortunadamente verificadas com o Stateright para o algoritmo de _Raft_ implementado.
 
-A implementação do nosso algoritmo Raft é feita sobre uma abstração de transporte, o que nos permite facilmente criar um transporte específico para o Stateright, sem modificar o código do algoritmo. Assim, conseguimos executar o Raft diretamente sobre este ambiente, facilitando a verificação formal das suas propriedades.
+A implementação do nosso algoritmo de _Raft_ é feita sobre uma abstração de transporte, o que nos permite facilmente criar um transporte específico para o Stateright sem modificar o código do algoritmo. Assim, conseguimos executar o _Raft_ diretamente sobre este ambiente, facilitando a verificação formal das respetivas propriedades.
 
 #pagebreak()
 
 = Faltas
 
-Para analisar o comportamento do Raft perante falhas bizantinas e comportamentos maliciosos, criámos uma "API de Faltas" que permite injetar código em pontos críticos da execução. Pontos críticos são por exemplo, numa receção de mensagem, numa transição de estado importante (exemplo: líder eleito), etc. Desta forma, conseguimos simular anomalias sem alterar o código do algoritmo Raft diretamente.
+Para analisar o comportamento do _Raft_ perante falhas bizantinas e comportamentos maliciosos, criámos uma "API de Faltas" que permite injetar código em pontos críticos da execução. Pontos críticos são por exemplo, numa receção de mensagem, numa transição de estado importante (exemplo: líder eleito), etc. Desta forma, conseguimos simular anomalias sem alterar o código do algoritmo diretamente.
 
-O impacto de cada falha foi avaliado com testes unitários (usando `cargo test`) com a integração com o Stateright, permitindo verificar se as propriedades eram violadas sob essas condições, e se a mitigação de cada falha era eficaz.
+O impacto de cada falha foi avaliado a partir de testes unitários (usando `cargo test`) com a integração do Stateright, permitindo verificar se as propriedades eram violadas sob essas condições, e se a mitigação de cada falha era eficaz.
 
-Nas secções seguintes, detalhamos as faltas específicas investigadas, o seu impacto potencial no sistema, a demonstração da sua ocorrência, as possíveis medidas de mitigação e a demonstração dessas medidas.
+Nas secções seguintes, detalhamos as faltas investigadas, o seu impacto potencial no sistema, a evidência de ocorrências, as possíveis medidas de mitigação e demonstração das mesmas.
 
 
 #let fault_counter = counter("fault")
@@ -165,19 +186,23 @@ Nas secções seguintes, detalhamos as faltas específicas investigadas, o seu i
 ][
   Um nó malicioso pode falsificar ou adulterar mensagens de outros nós.
 ][
-  O impacto desta falha é extremamente grave, pois um nó malicioso com capacidade de falsificar ou adulterar mensagens pode comprometer completamente a segurança e a confiabilidade do cluster. Entre os impactos possíveis, destacam-se:
+  O impacto desta falha é extremamente grave, pois um nó malicioso com capacidade de falsificar ou adulterar mensagens pode comprometer completamente a segurança e a confiabilidade do _cluster_. Entre os impactos possíveis, destacam-se:
 
   - Derrubar eleições legítimas, falsificando mensagens de votação para impedir a eleição de um líder correto;
+  
   - Eleger-se a si próprio, ao manipular votos ou resultados de eleições;
-  - Injetar entradas falsas no log, comprometendo a integridade dos dados replicados;
-  - Causar divisões no cluster, enviando mensagens contraditórias para diferentes nós, levando a estados inconsistentes;
+  
+  - Injetar entradas falsas no _log_, comprometendo a integridade dos dados replicados;
+  
+  - Causar divisões no _cluster_, enviando mensagens contraditórias para diferentes nós, levando a estados inconsistentes;
+  
   - Impedir a propagação de comandos legítimos, bloqueando ou adulterando mensagens de confirmação;
 
-  Em suma, a falsificação de mensagens permite a um atacante assumir controlo total do sistema, violando todas as propriedades de segurança e disponibilidade do protocolo Raft.
+  Em suma, a falsificação de mensagens permite a um atacante assumir controlo total do sistema, violando todas as propriedades de segurança e disponibilidade do protocolo _Raft_.
 ][
-  A demonstração de falsificação pode ser feita alterando os campos onde é enviado o `node_id` da mensagem. A identificação do nó é feita em campos de mensagens do Raft, e estes não são validados.
+  A demonstração de falsificação pode ser feita alterando os campos onde é enviado o `node_id` da mensagem. A identificação do nó é feita em campos de mensagens do _Raft_, e estes não são validados.
 
-  Exemplo:
+#code_block(
   ```rs
   struct VoteRequestMessage {
       node_id: Id, /// <--- Identificação do nó que envia a mensagem
@@ -186,11 +211,11 @@ Nas secções seguintes, detalhamos as faltas específicas investigadas, o seu i
       last_log_term: TermId,
   }
   ```
+)
 
   No Stateright, que foi onde testámos a falha, conseguimos facilmente encontrar um caso de teste que viola a propriedade de *Election Safety*.
 
-  Ao começar uma eleição, o nó malicioso envia mensagens de votação de todos os nós para ele próprio, de forma a que ele seja eleito, sem quaisquer verificações de outros nós.
-  Desta forma, é possível eleger dois líderes diferentes num mesmo termo, o que viola a propriedade de *Election Safety*.
+  Ao começar uma eleição, o nó malicioso envia mensagens de votação de todos os nós para ele próprio, de forma a que ele seja eleito, sem quaisquer verificações de outros nós. Desta forma, é possível eleger dois líderes diferentes num mesmo termo, o que viola a propriedade de *Election Safety*.
 
   #demonstration_box[
     *Localização:* src/fault/message_forgery.rs
@@ -256,9 +281,7 @@ Nas secções seguintes, detalhamos as faltas específicas investigadas, o seu i
 ][
   Permite que dois nós sejam eleitos como líder, o que quebra a propriedade de *Election Safety* do algoritmo.
 ][
-  Com o Stateright, podemos injetar código na receção do `VoteRequest` e responder sempre positivamente ao voto, sem verificar se o nó já votou noutro candidato.
-
-  Mais concretamente, o nó malicioso enviará sempre a mensagem `VoteResponse` com `vote_granted` a #raw(lang: "rs", "true"), independentemente do voto que recebeu.
+  Com o Stateright, podemos injetar código na receção do `VoteRequest` e responder sempre positivamente ao voto, sem verificar se o nó já votou noutro candidato. Mais concretamente, o nó malicioso enviará sempre a mensagem `VoteResponse` com `vote_granted` a #raw(lang: "rs", "true"), independentemente do pedido de voto que receber.
 
   #demonstration_box[
     *Localização:* src/fault/double_vote.rs
@@ -312,7 +335,7 @@ Nas secções seguintes, detalhamos as faltas específicas investigadas, o seu i
   ]
 
 ][
-  É possível resolver este problema com uma mensagem adicional, por exemplo, `ElectedBy`, que é enviada num fim de eleição, por todos os nós que foram eleitos para todos os outros nós, com a lista de nós que votaram nele. Caso seja detetado um nó que votou em dois candidatos diferentes, outros nós podem ignorar o seu voto futuramente (_black-listed_).
+  É possível resolver este problema com uma mensagem adicional, por exemplo, `ElectedBy`, que é difundida no fim da eleição por todos os nós eleitos, possuindo esta a lista de nós votantes. Caso seja detetado um nó que votou em dois candidatos diferentes, outros nós podem ignorar o seu voto futuramente (_black-listed_).
 
   Daqui surge um novo problema, que é, um nó bizantino pode dizer que recebeu votos de quem não votou nele, o que faria que esse outro nó fosse _black-listed_ indevidamente. Uma solução possível a este problema é recorrer a assinaturas digitais, que permitiriam identificar a autenticidade do voto.
 ][
@@ -338,7 +361,7 @@ Nas secções seguintes, detalhamos as faltas específicas investigadas, o seu i
 
     No entanto, após o nó malicioso ser _black-listed_, é invocada uma eleição imediatamente, e os seus votos passam a ser ignorados nas eleições seguintes, restaurando o funcionamento correto do algoritmo e prevenindo futuras violações desta propriedade.
 
-    Apenas precisamos garantir que o nó malicioso é colocado na lista negra (_black-listed_). As restantes propriedades já foram validadas em cenários sem nós maliciosos, e, após o _black-list_, o sistema volta a funcionar como se não existissem nós maliciosos.
+    Apenas precisamos de garantir que o nó malicioso é colocado na lista negra (_black-listed_). As restantes propriedades já foram validadas em cenários sem nós maliciosos, e, após o _black-list_, o sistema volta a funcionar como se não existissem nós maliciosos.
 
     #demonstration_subtitle[Sequência de Eventos]
     + `Timeout(Id(2), ElectionTimeout)`
@@ -351,7 +374,7 @@ Nas secções seguintes, detalhamos as faltas específicas investigadas, o seu i
     + `Id(1)` $->$ `Other(ElectedBy { leader: Id(1), term: 1, by: [Id(1), Id(0)] })` $->$ `Id(1)`
     + `Id(2)` $->$ `Other(ElectedBy { leader: Id(2), term: 1, by: [Id(2), Id(0)] })` $->$ `Id(1)`
 
-    O nó malicioso (0) viola o protocolo ao conceder voto positivo a dois candidatos diferentes (1 e 2) durante o mesmo termo de eleição. Como resultado, ambos os nós 1 e 2 acreditam ter obtido a maioria dos votos e assumem simultaneamente o papel de líder, o que viola a propriedade de "Election Safety" do algoritmo Raft. Esta situação só é detetada após o envio das mensagens `ElectedBy`, quando os nós honestos percebem que o mesmo nó (0) votou em mais do que um candidato. A partir desse momento, o nó malicioso é colocado na lista negra (_black-listed_) e os seus votos deixam de ser considerados em eleições futuras, restaurando a segurança do sistema.
+    O nó malicioso (0) viola o protocolo ao conceder voto positivo a dois candidatos diferentes (1 e 2) durante o mesmo termo de eleição. Como resultado, os nós 1 e 2 acreditam ter obtido a maioria dos votos e assumem simultaneamente o papel de líder, o que viola a propriedade de "Election Safety" do algoritmo de _Raft_. Esta situação só é detetada após o envio das mensagens `ElectedBy`, quando os nós honestos percebem que o mesmo nó (0) votou em mais do que um candidato. A partir desse momento, o nó malicioso é colocado na lista negra (_black-listed_) e os seus votos deixam de ser considerados em eleições futuras, restaurando a segurança do sistema.
 
     Neste caso, apenas o nó 1 detetou inicialmente o problema; no entanto, em eventos subsequentes, o nó 2 também irá identificar a infração.
 
@@ -395,13 +418,13 @@ Nas secções seguintes, detalhamos as faltas específicas investigadas, o seu i
 #fault_chapter[
   Negação de Serviço por Spam de Eleições
 ][
-  Cada _follower_ tem uma _timer_ para dar _timeout_ e começar uma eleição, quando não recebe atualizações de um líder. Um nó malicioso pode simplesmente ignorar esse _timer_ e começar sempre uma nova eleição. A cada momento desses, o nó malicioso, incrementa o seu _term_ e tenta eleger-se como líder. Como o seu _term_ é maior que o do líder, todos os nós (incluindo o líder) votam nele, e ele passa a ser o líder.
+  Cada _follower_ tem um _timer_ para dar _timeout_ e começar uma eleição, quando não recebe atualizações de um líder. Um nó malicioso pode simplesmente ignorar esse _timer_ e começar sempre uma nova eleição. A cada momento desses, o nó malicioso, incrementa o seu _term_ e tenta eleger-se como líder. Como o seu _term_ é maior que o do líder, todos os nós (incluindo o líder) votam nele, e ele passa a ser o líder.
 
   Este nó malicioso pode continuar a fazer isto indefinidamente, sempre que um líder é eleito.
 ][
-  Como não há um líder estável, a propriedade de _liveness_ não é respeitada, isto é, o sistema não consegue fazer progresso, visto que não há tempo suficiente para replicar as entradas no log.
+  Como não há um líder estável, a propriedade de _liveness_ não é respeitada, isto é, o sistema não consegue fazer progresso, visto que não há tempo suficiente para replicar as entradas no _log_.
 ][
-  Com o Stateright, podemos fazer com que a cada mensagem recebida, o nó malicioso comece uma eleição.
+  Com o Stateright, podemos fazer com que a cada mensagem recebida o nó malicioso comece uma eleição.
 
   #demonstration_box[
     *Localização:* src/fault/election_spam.rs
@@ -412,11 +435,11 @@ Nas secções seguintes, detalhamos as faltas específicas investigadas, o seu i
       - Id(1) --- #text(fill: red)[*Malicioso*]
       - Id(2) --- #text(fill: green.darken(50%))[Seguro]
 
-    Inicialmente, não tínhamos considerado que, com apenas um nó malicioso, o Stateright poderia encontrar cenários em que todas as propriedades de segurança fossem satisfeitas. Isto acontece porque, se o nó malicioso atrasar o envio das mensagens, os outros dois nós ainda conseguem formar uma maioria e executar o algoritmo Raft corretamente.
+    Inicialmente, não tínhamos considerado que, com apenas um nó malicioso, o Stateright poderia encontrar cenários em que todas as propriedades de segurança fossem satisfeitas. Isto acontece porque, se o nó malicioso atrasar o envio das mensagens, os outros dois nós ainda conseguem formar uma maioria e executar o algoritmo de _Raft_ corretamente.
 
     Por isso, foi necessário ajustar o teste para incluir dois nós maliciosos. Assim, garantimos que há sempre eleições a decorrer, impedindo a verificação da propriedade de _Log Liveness_.
 
-    Ainda assim, mesmo com dois nós maliciosos, o Stateright encontrou uma possibilidade de ainda haver líder na implementação do spam.
+    Ainda assim, mesmo com dois nós maliciosos, o Stateright encontrou uma possibilidade de ainda haver líder na implementação do _spam_.
     Se um dos nós maliciosos começar uma eleição e o nó 2 responder positivamente, o nó que começou a eleição passa a ser o líder.
 
     #demonstration_subtitle[Propriedades Não Verificadas]
@@ -426,11 +449,11 @@ Nas secções seguintes, detalhamos as faltas específicas investigadas, o seu i
 ][
   Para este problema, não há uma solução concreta, e teremos que recorrer a soluções heurísticas.
 
-  Uma solução possível é ignorar começos de eleições demasiado cedo, por exemplo, se um _term_ começou há menos de 1 minuto, ignorar o começo dele. No entanto, esta solução pode fazer com que o sistema volte demasiado tempo a voltar ao normal caso o líder realmente morra nesse espaço de tempo.
+  Uma solução possível é ignorar começos de eleições demasiado cedo, por exemplo, se um _term_ começou há menos de 1 minuto, não vamos participar em eleições futuras. No entanto, esta solução pode fazer com que o sistema demore demasiado tempo a voltar ao normal caso o líder realmente morra nesse intervalo de tempo.
 
   Outra solução possível é limitar o número de eleições que um nó pode iniciar num dado espaço de tempo, por exemplo, 1 eleição por hora.
 ][
-  Optámos por uma abordagem mais simples: se um nó iniciar eleições em três ocasiões consecutivas, esse nó é colocado na lista negra (_black-listed_). Desta forma, previne-se que nós maliciosos possam continuamente desestabilizar o sistema através de spam de eleições.
+  Optámos por uma abordagem mais simples: se um nó iniciar eleições em três ocasiões consecutivas, esse nó é colocado na lista negra (_black-listed_). Desta forma, previne-se que nós maliciosos possam continuamente desestabilizar o sistema através do _spam_ de eleições.
 
   #demonstration_box[
     *Localização:* src/fault/election_spam_fix.rs
@@ -445,7 +468,6 @@ Nas secções seguintes, detalhamos as faltas específicas investigadas, o seu i
       - #link(<election_safety>)[Segurança da Eleição (Election Safety)]
       - #link(<log_liveness>)[Vivacidade do Log (Log Liveness)]
       - #link(<election_liveness>)[Vivacidade de Eleições (Election Liveness)]
-      - #link(<election_safety>)[Segurança da Eleição (Election Safety)]
       - O nó malicioso é #text(fill: red)[black-listed];
         - Expectativa temporal: `Sometimes`
 
@@ -497,7 +519,6 @@ Nas secções seguintes, detalhamos as faltas específicas investigadas, o seu i
     - Nó Malicioso é #text(fill: red)[black-listed];
     - #link(<election_safety>)[Segurança da Eleição (Election Safety)]
     - #link(<election_liveness>)[Vivacidade de Eleições (Election Liveness)]
-    - #link(<election_safety>)[Segurança da Eleição (Election Safety)]
     - #link(<log_liveness>)[Vivacidade do Log (Log Liveness)]
   ]
 ]
@@ -505,9 +526,9 @@ Nas secções seguintes, detalhamos as faltas específicas investigadas, o seu i
 #pagebreak()
 
 #fault_chapter[
-  Bifurcação de _log_
+  Bifurcação de _Log_
 ][
-  Um nó malicioso pode enviar, no mesmo índice e termo, duas versões diferentes do _log_ para _subsets_ distintos de nós. Com isto, diferentes _quorum's_ de nós recebem versões diferentes do _log_, o que faz com que o _log_ se bifurque.
+  Um nó malicioso pode enviar, no mesmo índice e termo, duas versões diferentes do _log_ para _subsets_ distintos de nós. Com isto, diferentes _quorum's_ de nós recebem versões diferentes do _log_, o que faz proporciona uma bifurcação do _log_.
 ][
   Se dois conjuntos de nós aplicarem entradas diferentes no mesmo índice, a propriedade de _*Log Safety*_ é violada: leituras ou escritas podem comportar-se de forma inconsistente em caso de falhas do líder.
 ][
@@ -592,7 +613,7 @@ Nas secções seguintes, detalhamos as faltas específicas investigadas, o seu i
   ]
 
 ][
-  Uma possível solução para esta falta, seria aquando a receção de um `LogRequest` contendo novas entradas do _log_, enviar para todos os outros nós, uma mensagem adicional que contivesse um _hash_ calculado sobre o _log_ atual (até à posição de _commit_). Desta forma, ao receber a mensagem, os outros nós fariam _hash_ do seu _log_ até à posição de _commit_ que receberam (ou até ao seu próprio índice de _commit_ caso seja maior) e comparariam os dois _hashes_. Caso sejam diferentes, o líder seria bloqueado pelos vários nós (_black_listed_) que detetassem a divergência, e começariam uma nova eleição.
+  Uma possível solução para esta falha, seria aquando a receção de um `LogRequest` contendo novas entradas do _log_, enviar para todos os outros nós, uma mensagem adicional que contivesse um _hash_ calculado sobre o _log_ atual (até à posição de _commit_). Desta forma, ao receber a mensagem, os outros nós fariam _hash_ do seu _log_ até à posição de _commit_ que receberam (ou até ao seu próprio índice de _commit_ caso seja maior) e comparariam os dois _hashes_. Caso fossem diferentes, o líder seria bloqueado pelos vários nós (_black_listed_) que detetassem a divergência, e começariam uma nova eleição.
 
   No entanto, para além desta solução ser custosa em termos de tráfego de mensagens, não haveria forma de reestabelecer o _log_, já que não saberemos qual seria o _log_ real.
 
@@ -604,13 +625,13 @@ Nas secções seguintes, detalhamos as faltas específicas investigadas, o seu i
 #pagebreak()
 
 #fault_chapter[
-  _Commit_ de _log_ sem ser aceite pela maioria
+  _Commit_ de _Log_ sem ser Aceite pela Maioria
 ][
   Um nó líder malicioso pode incrementar o `commit_index` sem ter recebido confirmação da maioria dos nós.
 ][
-  Os _logs_ podem não estar atualizados numa maioria dos nós, o que faria com que, caso o líder falhasse, dados fossem perdidos. Isto quebra o princípio de _safety_, pois o sistema pode considerar como _committed_ entradas que, na realidade, não foram replicadas na maioria dos nós.
+  Os _logs_ podem não estar atualizados numa maioria de nós, o que faria com que, caso o líder falhasse, dados fossem perdidos. Isto quebra o princípio de _safety_, pois o sistema pode considerar como _committed_ entradas que, na realidade, não foram replicadas na maioria dos nós.
 
-  Por exemplo, imaginando que um líder recebe um pedido de escrita e adiciona a entrada ao seu _log_, mas, devido a uma falha de comunicação, apenas um dos seguidores recebe essa entrada, enquanto o outro não recebe nada. Se o líder for malicioso e incrementar o `commit_index` mesmo sem ter confirmação da maioria, ele pode responder ao cliente como se a operação estivesse garantida. Se este líder falhar imediatamente a seguir, e um novo líder for eleito entre os nós que não têm a entrada no _log_, a operação será perdida para sempre, apesar de já ter sido considerada _committed_ pelo sistema. Isto pode levar à perda de dados.
+  Por exemplo, imaginando que um líder recebe um pedido de escrita e adiciona a entrada ao seu _log_, mas, devido a uma falha de comunicação, apenas um dos seguidores recebe essa entrada, enquanto o outro não recebe nada. Se o líder for malicioso e incrementar o `commit_index` mesmo sem ter confirmação da maioria, ele pode responder ao cliente como se a operação estivesse garantida. Se este líder falhar imediatamente a seguir, e um novo líder for eleito entre os nós que não têm a entrada no _log_, a operação será perdida para sempre, apesar de já ter sido considerada _committed_ pelo sistema.
 
 ][
   Com o Stateright, podemos criar um nó malicioso que incrementa o `commit_index` para o tamanho do _log_ depois de qualquer mensagem ter sido enviada.
@@ -629,19 +650,28 @@ Nas secções seguintes, detalhamos as faltas específicas investigadas, o seu i
       - `ClientRequest::Write { key: 1, value: 42, msg_id: 1 }`
       - `ClientRequest::Write { key: 2, value: 43, msg_id: 2 }`
 
-    Apesar de termos configurado um ambiente de teste com 5 nós, permitindo falhas (_crashes_) e utilizando duas mensagens distintas para criar divergência nas entradas do _log_, o Stateright não detetou qualquer violação das propriedades. Não é claro se isto se deve a limitações na profundidade de exploração do Stateright, à inexistência efetiva do problema neste cenário, ou à impossibilidade de simular partições de rede entre os atores, uma vez que o Stateright não suporta este tipo de falha. Teríamos interesse em investigar mais a fundo as causas desta ausência de falhas detetadas, mas, devido a limitações de tempo, não nos foi possível fazê-lo.
+    Apesar de termos configurado um ambiente de teste com 5 nós, permitindo mortes (_crashes_) e utilizando duas mensagens distintas para criar divergência nas entradas do _log_, o Stateright não detetou qualquer violação das propriedades. Não é claro se isto se deve a limitações na profundidade de exploração do Stateright, à inexistência efetiva do problema neste cenário, ou à impossibilidade de simular partições de rede entre os atores, uma vez que o Stateright não suporta este tipo de falha. Teríamos interesse em investigar mais a fundo as causas desta ausência de falhas detetadas, mas, devido a limitações de tempo, não nos foi possível fazê-lo.
   ]
 ][
-  Este problema poderia ser resolvido, enviando uma assinatura digital como forma de autenticidade e autenticação em cada `LogResponse`. Assim, o líder era obrigado a guardar essas assinaturas, para as propagar a seguir. Os outros nós só aceitariam `LogRequest`'s que incrementem o `commit_index`, se nela conter assinaturas digitais válidas de um quorum de nós.
+  Este problema poderia ser resolvido, enviando uma assinatura digital como forma de autenticidade em cada `LogResponse`. Assim, o líder era obrigado a guardar essas assinaturas, para as propagar a seguir. Os outros nós só aceitariam `LogRequest`'s que incrementem o `commit_index`, se estes apresentassem assinaturas digitais válidas de um _quorum_ de nós.
 ][
-  Da mesma forma que na solução da @falsificacao[], devido à natureza do problema, que não está relacionada com os conteúdos abordados na unidade curricular, não iremos implementar a mitigação.
+  Da mesma forma que na solução da @falsificacao[], a natureza do problema não está relacionada com os conteúdos abordados na unidade curricular, portanto não iremos implementar a mitigação.
 ]
 
 = Conclusão
 
-Este trabalho prático permitiu ao grupo aprofundar significativamente o conhecimento sobre o algoritmo Raft, as suas complexidades e as implicações de faltas assertivas na sua operação. A exploração de diferentes cenários de falhas e a exploração de mitigações eficazes proporcionaram uma perspetiva valiosa sobre o delicado balanço entre garantir a correção do sistema e manter um bom desempenho. A utilização do Stateright revelou-se uma excelente escolha. Ofereceu uma experiência de utilizador consideravelmente superior à do Maelstrom para a verificação formal de propriedades, a identificação de vulnerabilidades e a exploração de possíveis estados.
+Este trabalho prático permitiu ao grupo aprofundar significativamente o conhecimento sobre o algoritmo de _Raft_, as suas complexidades e as implicações de faltas assertivas na sua operação. A exploração de diferentes cenários de falhas e invetigação de mitigações eficazes proporcionaram uma perspetiva valiosa sobre o delicado balanço entre garantir a correção do sistema e manter um bom desempenho.
 
-Adicionalmente, o grupo gostaria de ter tido a oportunidade de expandir a funcionalidade da aplicação principal. Seria interessante que, para além da integração com o Maelstrom, fosse possível executar nós Raft com as faltas implementadas ativadas diretamente, dado que a "API de Faltas" foi concebida de forma genérica sobre a implementação do Raft. Outra área de exploração futura seria a integração mais dinâmica com o Stateright, permitindo, por exemplo, a execução da sua interface gráfica (UI) com atores e cenários definidos dinamicamente, facilitando uma análise ainda mais interativa e detalhada do comportamento do sistema.
+A utilização do Stateright revelou-se uma excelente escolha, visto oferecer uma experiência de utilização consideravelmente superior à do Maelstrom para a verificação formal de propriedades, identificação de vulnerabilidades e exploração de possíveis estados.
 
-#figure(image("stateright_explorer.png", width: 90%), caption: [Interface gráfica do Stateright])
+Adicionalmente, o grupo gostaria de ter tido a oportunidade de expandir a funcionalidade da aplicação principal. Seria interessante que, para além da integração com o Maelstrom, fosse possível executar nós _Raft_ com as faltas implementadas ativadas diretamente, dado que a "API de Faltas" foi concebida de forma genérica sobre a implementação do Raft. Outra área de exploração futura seria a integração mais dinâmica com o Stateright, permitindo, por exemplo, a execução da sua interface gráfica (UI) com atores e cenários definidos dinamicamente, facilitando uma análise ainda mais interativa e detalhada do comportamento do sistema.
 
+#figure(
+  block(
+    inset: 1pt,
+    radius: 5pt,
+    stroke: 2pt + black,
+    image("stateright_explorer.png", width: 100%),
+  ),
+  caption: [Interface gráfica do Stateright]
+)
