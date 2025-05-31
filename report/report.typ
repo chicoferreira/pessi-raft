@@ -13,13 +13,12 @@
   text(weight: "medium", name), text(size: 1em, number),
 )
 
-#let code_block(content) = block(
+#show raw.where(block: true): block.with(
   width: 100%,
-  inset: 5pt,
+  inset: 0.80em,
   radius: 6pt,
   fill: luma(240),
   stroke: luma(200),
-  content
 )
 
 #align(
@@ -67,28 +66,24 @@ A estrutura principal do código está dividida em módulos que separam as respo
 
 Para testar a implementação via _Maelstrom_ foi utilizado o seguinte comando:
 
-#code_block(
-  ```bash
-  cargo build --release
-  java -jar maelstrom.jar test
-      -w lin-kv
-      --bin ".\target\release\pessi-raft.exe"
-      --time-limit 60
-      --node-count 3
-      --concurrency 10n
-      --rate 100
-      --nemesis partition
-      --nemesis-interval 3
-  ```
-)
+```bash
+cargo build --release
+java -jar maelstrom.jar test
+    -w lin-kv
+    --bin ".\target\release\pessi-raft.exe"
+    --time-limit 60
+    --node-count 3
+    --concurrency 10n
+    --rate 100
+    --nemesis partition
+    --nemesis-interval 3
+```
 
 Como resultado, observamos que o _Maelstrom_ não detetou falhas no nosso algoritmo.
 
-#code_block(
 ```
 > Everything looks good!
 ```
-)
 
 No entanto, não é certo que o algoritmo esteja totalmente correto, pois o _Maelstrom_ apenas testa um subconjunto limitado de cenários e não garante a cobertura de todos os estados possíveis ou falhas do sistema.
 
@@ -189,20 +184,19 @@ Nas secções seguintes, detalhamos as faltas investigadas, o seu impacto potenc
   O impacto desta falha é extremamente grave, pois um nó malicioso com capacidade de falsificar ou adulterar mensagens pode comprometer completamente a segurança e a confiabilidade do _cluster_. Entre os impactos possíveis, destacam-se:
 
   - Derrubar eleições legítimas, falsificando mensagens de votação para impedir a eleição de um líder correto;
-  
+
   - Eleger-se a si próprio, ao manipular votos ou resultados de eleições;
-  
+
   - Injetar entradas falsas no _log_, comprometendo a integridade dos dados replicados;
-  
+
   - Causar divisões no _cluster_, enviando mensagens contraditórias para diferentes nós, levando a estados inconsistentes;
-  
+
   - Impedir a propagação de comandos legítimos, bloqueando ou adulterando mensagens de confirmação;
 
   Em suma, a falsificação de mensagens permite a um atacante assumir controlo total do sistema, violando todas as propriedades de segurança e disponibilidade do protocolo _Raft_.
 ][
   A demonstração de falsificação pode ser feita alterando os campos onde é enviado o `node_id` da mensagem. A identificação do nó é feita em campos de mensagens do _Raft_, e estes não são validados.
 
-#code_block(
   ```rs
   struct VoteRequestMessage {
       node_id: Id, /// <--- Identificação do nó que envia a mensagem
@@ -211,7 +205,6 @@ Nas secções seguintes, detalhamos as faltas investigadas, o seu impacto potenc
       last_log_term: TermId,
   }
   ```
-)
 
   No Stateright, que foi onde testámos a falha, conseguimos facilmente encontrar um caso de teste que viola a propriedade de *Election Safety*.
 
@@ -673,5 +666,5 @@ Adicionalmente, o grupo gostaria de ter tido a oportunidade de expandir a funcio
     stroke: 2pt + black,
     image("stateright_explorer.png", width: 100%),
   ),
-  caption: [Interface gráfica do Stateright]
+  caption: [Interface gráfica do Stateright],
 )
