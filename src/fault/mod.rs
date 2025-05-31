@@ -3,7 +3,6 @@ mod double_vote;
 mod double_vote_fix;
 mod election_spam;
 mod election_spam_fix;
-mod fake_commit_log;
 mod forking_log;
 mod injector;
 mod message_forgery;

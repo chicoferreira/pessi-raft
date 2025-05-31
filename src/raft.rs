@@ -576,9 +576,9 @@ impl<Id: Clone + Default + Eq + Hash + std::fmt::Display> Node<Id> {
         self.commit_length
     }
 
-    pub fn commit_length_mut_ref(&mut self) -> &mut usize {
-        &mut self.commit_length
-    }
+    // pub fn commit_length_mut_ref(&mut self) -> &mut usize {
+    //     &mut self.commit_length
+    // }
 
     pub fn get_id(&self) -> &Id {
         &self.id

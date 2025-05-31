@@ -1,3 +1,4 @@
+use anyhow::Context;
 use log::error;
 use std::time::Duration;
 
@@ -14,7 +15,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let mut server = maelstrom::MaelstromServer::new();
-    let (node_id, node_ids) = server.init().await?;
+    let (node_id, node_ids) = server.init().await.context("Failed to get init message")?;
 
     let mut node = raft::Node::new(node_id, node_ids);
     let mut ticker = tokio::time::interval(Duration::from_millis(50));
